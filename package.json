@@ -8,7 +8,6 @@
     "run": "tsx src/cli.ts run",
     "smoke": "tsx src/cli.ts smoke"
   },
-
   "keywords": [],
   "author": "",
   "license": "ISC",

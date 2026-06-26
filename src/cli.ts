@@ -1,11 +1,10 @@
-import process from "node:process";
-process.loadEnvFile();
 import "dotenv/config";
 import { loadFixture } from "./jira/load-fixture.js";
 import { generateTestPlan } from "./planner/plan-from-fixture.js";
+import { runApiCases } from "./agents/api/run-api-cases.js";
 
 const args = process.argv.slice(2);
-
+const command = args[0]; // Terminalden gelen ilk kelime ('plan' veya 'run')
 const fixtureIndex = args.indexOf("--fixture");
 
 if (fixtureIndex === -1) {
@@ -15,13 +14,22 @@ if (fixtureIndex === -1) {
 
 const fixtureId = args[fixtureIndex + 1]!;
 
-const ticket = loadFixture(fixtureId);
-
-console.log(`Ticket: ${ticket.issue.key}: ${ticket.issue.summary}`);
 (async () => {
   try {
-    await generateTestPlan(fixtureId);
+    const ticket = loadFixture(fixtureId);
+    console.log(`Bilet Okundu -> ${ticket.issue.key}: ${ticket.issue.summary}`);
+
+    if (command === "plan") {
+      // Sadece plan oluşturmak istersek
+      await generateTestPlan(fixtureId);
+    } else if (command === "run") {
+      // Testleri çalıştırmak istersek
+      console.log("Run komutu algılandı, API testleri ateşleniyor...");
+      await runApiCases();
+    } else {
+      console.log("Geçersiz komut. Lütfen 'npm run plan' veya 'npm run run' kullanın.");
+    }
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Bir hata oluştu la:", error);
   }
 })();
