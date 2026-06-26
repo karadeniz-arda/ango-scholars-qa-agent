@@ -1,0 +1,6 @@
+default_target: staging
+
+environments:
+  staging:
+    url: https://scholars-client-575683486613.us-east1.run.app
+    api_url: https://scholars-server-575683486613.us-east1.run.app
