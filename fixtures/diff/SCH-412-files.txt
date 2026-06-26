@@ -1,0 +1,5 @@
+src/api/endpoints/company-skills/useExportSkillsTaxonomy.query.ts
+src/modules/company/skills/components/SkillsTable.tsx
+src/modules/company/skills/routes/CompanySkills.route.tsx
+src/modules/company/skills/hooks/useSkillTableColumns.tsx
+src/intl/en.json

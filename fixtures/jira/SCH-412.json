@@ -1,0 +1,107 @@
+{
+  "issue": {
+    "key": "SCH-412",
+    "url": "https://example.atlassian.net/browse/SCH-412",
+    "summary": "Company admin can export skills taxonomy as CSV from Skills page",
+    "status": "In Test",
+    "labels": ["tunai", "company-skills", "qa-fixture"],
+    "updated": "2026-06-20T14:30:00.000Z",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "As a company admin, I want to download our skills taxonomy as a CSV file so I can share it with HR or import it into external tools."
+            }
+          ]
+        },
+        {
+          "type": "heading",
+          "attrs": { "level": 3 },
+          "content": [{ "type": "text", "text": "Acceptance criteria" }]
+        },
+        {
+          "type": "bulletList",
+          "content": [
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "On /company/skills, an Export (or Download CSV) action is visible to users with MANAGE_SKILLS permission."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Clicking Export triggers GET /skills/export-csv and downloads a CSV file with column headers: category, mainDiscipline, secondaryDiscipline (or equivalent)."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Talent users and unauthenticated users cannot access the export endpoint."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "listItem",
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Export shows a success toast or browser download; errors show a user-visible message (not a silent failure)."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "comments": [
+      {
+        "author": "Product Owner",
+        "created": "2026-06-19T09:00:00.000Z",
+        "body": "Use the same CSV format as the skills import template. Empty taxonomy should still download headers-only CSV."
+      },
+      {
+        "author": "Engineer",
+        "created": "2026-06-20T11:15:00.000Z",
+        "body": "Merged to staging. API route is GET /skills/export-csv. Frontend hook: useExportSkillsTaxonomy. Please verify on staging with qa-company account."
+      }
+    ]
+  },
+  "trigger": {
+    "source": "fixture",
+    "markerPrefix": "QA-MARKER:"
+  }
+}

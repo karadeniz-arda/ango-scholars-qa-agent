@@ -1,0 +1,48 @@
+diff --git a/src/api/endpoints/company-skills/useExportSkillsTaxonomy.query.ts b/src/api/endpoints/company-skills/useExportSkillsTaxonomy.query.ts
+new file mode 100644
+index 0000000..c0ffee0
+--- /dev/null
++++ b/src/api/endpoints/company-skills/useExportSkillsTaxonomy.query.ts
+@@ -0,0 +1,26 @@
++import { useQuery } from '@tanstack/react-query';
++import { createUseQueryFetcher } from '@/api/core/fetcher';
++import { apiUrlPrefix } from '@/api/core/env';
++import type { paths } from '@/api/data/scholars-server';
++
++const useQueryFetcher = createUseQueryFetcher<paths, '/skills/export-csv', 'get'>(
++  '/skills/export-csv',
++  'get',
++  { apiUrlPrefix },
++);
++
++export function useExportSkillsTaxonomy(args = {}, options = {}) {
++  const [queryKey, fetch] = useQueryFetcher(args, useExportSkillsTaxonomy);
++  return useQuery({ queryKey, queryFn: fetch, enabled: false, ...options });
++}
++
+diff --git a/src/modules/company/skills/components/SkillsTable.tsx b/src/modules/company/skills/components/SkillsTable.tsx
+index abc1234..def5678 100644
+--- a/src/modules/company/skills/components/SkillsTable.tsx
++++ b/src/modules/company/skills/components/SkillsTable.tsx
+@@ -1,5 +1,7 @@
+ import { Button, Space } from 'antd';
++import { DownloadOutlined } from '@ant-design/icons';
+ import { useExportSkillsTaxonomy } from '@/api/endpoints/company-skills/useExportSkillsTaxonomy.query';
++import { downloadBlob } from '@/utils/download';
+ 
+ export function SkillsTable() {
++  const exportQuery = useExportSkillsTaxonomy();
++
++  const handleExport = async () => {
++    const result = await exportQuery.refetch();
++    if (result.data) downloadBlob(result.data, 'skills-taxonomy.csv');
++  };
++
+   return (
+     <Space>
++      <Button icon={<DownloadOutlined />} onClick={handleExport}>
++        Export CSV
++      </Button>
+       {/* existing table */}
+     </Space>
+   );
