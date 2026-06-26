@@ -1,5 +1,6 @@
 import process from "node:process";
 process.loadEnvFile();
+import "dotenv/config";
 import { loadFixture } from "./jira/load-fixture.js";
 import { generateTestPlan } from "./planner/plan-from-fixture.js";
 
