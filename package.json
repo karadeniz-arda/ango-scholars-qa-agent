@@ -4,11 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "plan": "tsx src/cli.ts plan",
-  "run": "tsx src/cli.ts run",
-  "smoke": "tsx src/cli.ts smoke"
-},
-  
+    "plan": "tsx src/cli.ts plan",
+    "run": "tsx src/cli.ts run",
+    "smoke": "tsx src/cli.ts smoke"
+  },
+
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -21,6 +21,7 @@
   "dependencies": {
     "@browserbasehq/stagehand": "^3.6.0",
     "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
     "openai": "^6.45.0",
     "playwright": "^1.61.1",
     "yaml": "^2.9.0",
