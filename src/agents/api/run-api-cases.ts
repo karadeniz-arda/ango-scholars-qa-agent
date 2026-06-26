@@ -4,7 +4,7 @@ import { MockAuthProvider } from "../../auth/index.js";
 import type { TestPlan } from "../../planner/types.js";
 
 export async function runApiCases() {
-  console.log("\n🚀 API Tests starting..");
+  console.log("\nAPI Tests starting..");
 
   const envFile = fs.readFileSync("config/environments.yaml", "utf8");
   const config = yaml.parse(envFile);
@@ -19,7 +19,7 @@ export async function runApiCases() {
   const results = [];
 
   for (const testCase of plan.apiCases) {
-    console.log(`Test ediliyor: [${testCase.id}] ${testCase.method} ${testCase.path} (Rol: ${testCase.persona})`);
+    console.log(`Testing: [${testCase.id}] ${testCase.method} ${testCase.path} (Rol: ${testCase.persona})`);
     
     const token = await auth.getIdToken(testCase.persona);
 

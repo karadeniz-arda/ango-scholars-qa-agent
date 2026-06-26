@@ -69,7 +69,7 @@ export async function generateTestPlan(ticketId: string) {
   }
   
   fs.writeFileSync("qa-results/test-plan.json", aiAnswer || "{}", "utf-8");
-  console.log("Mükemmel! Test planı 'qa-results/test-plan.json' adresine kaydedildi.");
+  console.log("Test plan saved");
 
   return aiAnswer;
 }
