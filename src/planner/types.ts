@@ -2,7 +2,7 @@
 // One HTTP test
 export type ApiTestCase = {
   id: string;
-  persona: "talent" | "company_admin";
+  persona: "talent" | "company_admin" | "unauthenticated";
   method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   body?: unknown;

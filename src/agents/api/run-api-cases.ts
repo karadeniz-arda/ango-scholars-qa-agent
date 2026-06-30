@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import yaml from "yaml";
-import { MockAuthProvider } from "../../auth/index.js";
+//import { MockAuthProvider } from "../../auth/index.js";
 import type { TestPlan } from "../../planner/types.js";
+
+import { getIdTokenForPersona } from "../../auth/firebase.js";
 
 export async function runApiCases() {
   console.log("\nAPI Tests starting..");
@@ -15,31 +17,32 @@ export async function runApiCases() {
   const cleanPlanFile = planFile.replace(/```json/g, "").replace(/```/g, "").trim();
   const plan: TestPlan = JSON.parse(cleanPlanFile);
 
-  const auth = new MockAuthProvider();
   const results = [];
 
   for (const testCase of plan.apiCases) {
     console.log(`Testing: [${testCase.id}] ${testCase.method} ${testCase.path} (Rol: ${testCase.persona})`);
     
-    const token = await auth.getIdToken(testCase.persona);
+    let token = "";
+    
+    if (testCase.persona !== "unauthenticated"){
+      token = await getIdTokenForPersona(testCase.persona);
+    }
+
+    const requestHeaders: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    
+    if (token !== "") {
+      requestHeaders["Authorization"] = `Bearer ${token}`;
+    }
 
     try {
       const response = await fetch(`${apiUrl}${testCase.path}`, {
         method: testCase.method,
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json"
-        }
+        headers: requestHeaders
       });
 
-      if (response.status === 401 || response.status === 403) {
-        results.push({
-          id: testCase.id,
-          status: "BLOCKED",
-          notes: `${response.status} — no real login yet`
-        });
-        console.log(` Result: BLOCKED (${response.status} authocentation problem)`);
-      } else if (response.status === testCase.expect.status) {
+      if (response.status === testCase.expect.status) {
         results.push({ id: testCase.id, status: "PASS", notes: "" });
         console.log(` Result : PASS`);
       } else {
