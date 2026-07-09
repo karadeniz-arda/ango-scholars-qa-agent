@@ -9,5 +9,3 @@ export class MockAuthProvider implements AuthProvider {
     return `mock-token-for-${persona}`;
   }
 }
-
-// TODO: FirebaseAuthProvider

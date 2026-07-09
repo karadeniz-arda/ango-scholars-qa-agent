@@ -6,7 +6,8 @@
   "scripts": {
     "plan": "tsx src/cli.ts plan",
     "run": "tsx src/cli.ts run",
-    "smoke": "tsx src/cli.ts smoke"
+    "smoke": "tsx src/cli.ts smoke",
+    "browser": "tsx src/cli.ts browser"
   },
   "keywords": [],
   "author": "",
