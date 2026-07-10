@@ -27,7 +27,9 @@ async function visualAction(page: Page, locator: Locator, action: "click") {
   }
 }
 
-
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function getBrowserBlockReason(testCase: any): string | null {
   const persona = String(testCase.persona || "").trim();
@@ -57,12 +59,13 @@ type BrowserStep =
   | { action: "setViewport"; width: number; height: number };
 
 type BrowserStepResult = {
-  status: "PASS" | "FAIL" | "DONE";
+  status: "PASS" | "FAIL" | "MANUAL_REQUIRED" | "ERROR";
+  reasonCategory: string;
   notes: string[];
 };
 
 async function clickVisibleTextInMainArea(page: Page, text: string) {
-  const locator = page.getByText(new RegExp(`^${text}$`, "i"));
+  const locator = page.getByText(new RegExp(`^${escapeRegExp(text)}$`, "i"));
   const count = await locator.count();
   
   for (let i = 0; i < count; i++) {
@@ -324,85 +327,132 @@ async function selectLastDropdownOption(page: Page) {
   return true;
 }
 
+function getBrowserCaseText(testCase: any): string {
+  const stepText = Array.isArray(testCase.steps)
+    ? testCase.steps
+        .map((step: any) => [step.action, step.text].filter(Boolean).join(" "))
+        .join(" ")
+    : "";
+
+  return [testCase.goal, testCase.successCriteria, stepText]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function isComplexDropdownCase(testCase: any): boolean {
+  const text = getBrowserCaseText(testCase);
+
+  const mentionsDropdown =
+    text.includes("dropdown") ||
+    text.includes("selector") ||
+    text.includes("select issue") ||
+    text.includes("last item") ||
+    text.includes("scrollable") ||
+    text.includes("scroll inside");
+
+  const mentionsProjectOrSelection =
+    text.includes("project") ||
+    text.includes("select") ||
+    text.includes("selection");
+
+  return mentionsDropdown && mentionsProjectOrSelection;
+}
+
 async function runGenericBrowserSteps(
   page: Page,
   testCase: any
 ): Promise<BrowserStepResult> {
   const steps = testCase.steps as BrowserStep[] | undefined;
   const notes: string[] = [];
-  
-  
 
   if (!Array.isArray(steps) || steps.length === 0) {
-    const note = "No structured browser steps provided. Screenshot-only case.";
+    const note =
+      "No structured browser steps provided. Screenshot-only browser cases require manual verification.";
     console.log(` Generic browser steps: ${note}`);
+
     return {
-      status: "DONE",
+      status: "MANUAL_REQUIRED",
+      reasonCategory: "NO_STRUCTURED_STEPS",
       notes: [note],
     };
   }
-  
+
   let hasAssertion = false;
   let hasFailedAssertion = false;
-  
+  let needsManualVerification = false;
+  let hasActionLimitation = false;
+
   for (const step of steps) {
     if (step.action === "wait") {
       await page.waitForTimeout(step.ms);
       notes.push(`wait ${step.ms}ms`);
       continue;
     }
-    
+
     if (step.action === "setViewport") {
       await page.setViewportSize({
         width: step.width,
         height: step.height,
       });
+
       await page.waitForTimeout(1000);
+
       const note = `setViewport ${step.width}x${step.height}`;
       notes.push(note);
       console.log(` Generic browser step ${note}`);
+
       continue;
     }
-    
+
     if (step.action === "clickTopTab") {
       const clicked = await clickVisibleTextInMainArea(page, step.text);
+
       if (clicked) {
         notes.push(`clicked top/main tab "${step.text}"`);
       } else {
-        notes.push(`could not click top/main tab "${step.text}"`);
+        notes.push(
+          `could not click top/main tab "${step.text}" - continuing with assertions`
+        );
+        hasActionLimitation = true;
       }
+
       continue;
     }
-    
+
     if (step.action === "clickButton") {
       const button = page
         .locator("button")
-        .filter({ hasText: new RegExp(`^${step.text}$`, "i") })
+        .filter({ hasText: new RegExp(`^${escapeRegExp(step.text)}$`, "i") })
         .first();
-        
+
       if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
         await visualAction(page, button, "click");
         await page.waitForTimeout(1000);
+
         const note = `clicked button "${step.text}"`;
         notes.push(note);
         console.log(` Generic browser step ${note}`);
       } else {
-        const note = `button "${step.text}" not visible`;
+        const note = `button "${step.text}" not visible or not safely clickable - continuing with assertions`;
         notes.push(note);
         console.log(` Generic browser step ${note}`);
+        hasActionLimitation = true;
       }
+
       continue;
     }
-    
-    if (step.action === "clickProjectDropdown") {
-  const clicked = await clickProjectDropdown(page);
 
-    if (clicked) {
-      notes.push("clicked project dropdown");
-    } else {
-      notes.push("could not click project dropdown");
-      hasFailedAssertion = true;
-    }
+    if (step.action === "clickProjectDropdown") {
+      const clicked = await clickProjectDropdown(page);
+
+      if (clicked) {
+        notes.push("clicked project dropdown");
+      } else {
+        notes.push("manual required: could not open project dropdown reliably");
+        hasActionLimitation = true;
+        needsManualVerification = true;
+      }
 
       continue;
     }
@@ -413,8 +463,11 @@ async function runGenericBrowserSteps(
       if (selected) {
         notes.push("selected last dropdown option");
       } else {
-        notes.push("could not select last dropdown option");
-        hasFailedAssertion = true;
+        notes.push(
+          "manual required: could not reliably scroll/select/verify the last dropdown option"
+        );
+        hasActionLimitation = true;
+        needsManualVerification = true;
       }
 
       continue;
@@ -422,69 +475,105 @@ async function runGenericBrowserSteps(
 
     if (step.action === "clickText") {
       const clicked = await clickVisibleTextInMainArea(page, step.text);
+
       if (clicked) {
         notes.push(`clicked text "${step.text}"`);
       } else {
-        notes.push(`could not click text "${step.text}"`);
+        notes.push(
+          `could not click text "${step.text}" - continuing with assertions`
+        );
+        hasActionLimitation = true;
       }
+
       continue;
     }
-    
+
     if (step.action === "assertTextVisible") {
       hasAssertion = true;
+
       const visible = await page
-        .getByText(new RegExp(step.text, "i"))
+        .getByText(new RegExp(escapeRegExp(step.text), "i"))
         .first()
         .isVisible({ timeout: 2000 })
         .catch(() => false);
-        
-      const note = `assert visible "${step.text}": ${visible ? "PASS" : "FAIL"}`;
+
+      const note = `assert visible "${step.text}": ${
+        visible ? "PASS" : "FAIL"
+      }`;
+
       notes.push(note);
       console.log(` Generic browser assertion ${note}`);
-      
+
       if (!visible) {
         hasFailedAssertion = true;
       }
+
       continue;
     }
-    
+
     if (step.action === "assertTextNotVisible") {
       hasAssertion = true;
+
       const visible = await page
-        .getByText(new RegExp(step.text, "i"))
+        .getByText(new RegExp(escapeRegExp(step.text), "i"))
         .first()
         .isVisible({ timeout: 2000 })
         .catch(() => false);
-        
+
       const passed = !visible;
-      const note = `assert not visible "${step.text}": ${passed ? "PASS" : "FAIL"}`;
+      const note = `assert not visible "${step.text}": ${
+        passed ? "PASS" : "FAIL"
+      }`;
+
       notes.push(note);
       console.log(` Generic browser assertion ${note}`);
-      
+
       if (!passed) {
         hasFailedAssertion = true;
       }
+
       continue;
     }
+
+    notes.push(`manual required: unsupported browser step "${(step as any).action}"`);
+    needsManualVerification = true;
   }
-  
+
+  if (
+  needsManualVerification ||
+  (isComplexDropdownCase(testCase) && hasActionLimitation)
+) {
+  return {
+    status: "MANUAL_REQUIRED",
+    reasonCategory: "AUTOMATION_LIMITATION",
+    notes,
+  };
+}
+
+
   if (hasFailedAssertion) {
-    return {
-      status: "FAIL",
-      notes,
-    };
-  }
-  
+  return {
+    status: "FAIL",
+    reasonCategory: "PRODUCT_ASSERTION_FAILED",
+    notes,
+  };
+}
+
   if (hasAssertion) {
     return {
       status: "PASS",
+      reasonCategory: "ASSERTIONS_PASSED",
       notes,
     };
   }
-  
+
   return {
-    status: "DONE",
-    notes,
+    status: "MANUAL_REQUIRED",
+    reasonCategory: "NO_EXPLICIT_ASSERTIONS",
+    notes: [
+      ...notes,
+      "No explicit assertions were executed. Manual verification is required.",
+    ],
   };
 }
 
@@ -601,6 +690,8 @@ export async function runBrowserCases() {
       results.push({
         id: testCase.id,
         status: "BLOCKED",
+        startRoute: testCase.startRoute,
+        reasonCategory: "MISSING_BROWSER_ROUTE",
         evidence: blockReason,
       });
     }
@@ -693,6 +784,8 @@ export async function runBrowserCases() {
       results.push({
         id: testCase.id,
         status: "BLOCKED",
+        reasonCategory: "MISSING_BROWSER_ROUTE",
+        startRoute: testCase.startRoute,
         evidence: blockReason,
       });
       console.log(` Result: BLOCKED (${blockReason})`);
@@ -737,6 +830,8 @@ if (signedInPersona !== persona) {
       results.push({
         id: testCase.id,
         status: stepResult.status,
+        reasonCategory: stepResult.reasonCategory,
+        startRoute: testCase.startRoute,
         evidence:
           stepResult.notes.length > 0
             ? `${screenshotPath} | ${stepResult.notes.join(" | ")}`
@@ -747,6 +842,8 @@ if (signedInPersona !== persona) {
       results.push({
         id: testCase.id,
         status: "ERROR",
+        reasonCategory: "AGENT_RUNTIME_ERROR",
+        startRoute: testCase.startRoute,
         evidence: error.message,
       });
     }

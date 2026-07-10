@@ -88,7 +88,6 @@ function getBlockReason(testCase: any): string | null {
   const persona = String(testCase.persona || "").trim();
   const path = String(testCase.path || "").trim();
   const method = String(testCase.method || "").trim().toUpperCase();
-  const notes = getCaseNotes(testCase).toLowerCase();
 
   if (!supportedPersonas.has(persona as SupportedPersona)) {
     return `Unsupported persona "${persona}". Supported personas: company_admin, talent, unauthenticated.`;
@@ -150,16 +149,17 @@ export async function runApiCases() {
 
     if (blockReason) {
       results.push({
-        id: testCase.id,
-        persona,
-        method,
-        originalPath: rawTestCase.path,
-        resolvedPath: path,
-        expectedStatus: testCase.expect?.status,
-        actualStatus: "",
-        status: "BLOCKED",
-        notes: blockReason,
-      });
+      id: testCase.id,
+      persona,
+      method,
+      originalPath: rawTestCase.path,
+      resolvedPath: path,
+      expectedStatus: testCase.expect?.status,
+      actualStatus: "",
+      status: "BLOCKED",
+      reasonCategory: "MISSING_API_CONTEXT",
+      notes: blockReason,
+    });
 
       console.log(` Result: BLOCKED (${blockReason})`);
       continue;
@@ -200,16 +200,17 @@ export async function runApiCases() {
 
       if (response.status === testCase.expect.status) {
         results.push({
-          id: testCase.id,
-          persona,
-          method,
-          originalPath: rawTestCase.path,
-          resolvedPath: path,
-          expectedStatus: testCase.expect?.status,
-          actualStatus: response.status,
-          status: "PASS",
-          notes: "",
-        });
+        id: testCase.id,
+        persona,
+        method,
+        originalPath: rawTestCase.path,
+        resolvedPath: path,
+        expectedStatus: testCase.expect?.status,
+        actualStatus: response.status,
+        status: "PASS",
+        reasonCategory: "EXPECTED_STATUS_MATCHED",
+        notes: "",
+      });
 
         console.log(" Result: PASS");
       } else {
@@ -222,6 +223,7 @@ export async function runApiCases() {
           expectedStatus: testCase.expect?.status,
           actualStatus: response.status,
           status: "FAIL",
+          reasonCategory: "API_EXPECTATION_FAILED",
           notes: `Expected: ${testCase.expect.status}, Given: ${response.status}. Body: ${JSON.stringify(responseBody).slice(0, 1000)}`,
         });
 
@@ -229,7 +231,7 @@ export async function runApiCases() {
         console.log(" Response body:", responseBody);
       }
     } catch (error: any) {
-      results.push({
+        results.push({
         id: testCase.id,
         persona,
         method,
@@ -237,12 +239,13 @@ export async function runApiCases() {
         resolvedPath: path,
         expectedStatus: testCase.expect?.status,
         actualStatus: "ERROR",
-        status: "FAIL",
-        notes: `Execution Error: ${error.message}`,
+        status: "ERROR",
+        reasonCategory: "AGENT_RUNTIME_ERROR",
+        notes: `Agent/runtime execution error: ${error.message}`,
       });
 
-      console.log(` Result: FAIL (Execution Error: ${error.message})`);
-    }
+        console.log(` Result: ERROR (Agent/runtime execution error: ${error.message})`);
+      }
   }
 
   return results;
