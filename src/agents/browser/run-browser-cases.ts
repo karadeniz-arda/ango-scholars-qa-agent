@@ -655,7 +655,7 @@ export async function runBrowserCases() {
   const envFile = fs.readFileSync("config/environments.yaml", "utf8");
   const config = yaml.parse(envFile);
   const baseUrl = String(
-    config.environments.staging.url || "[https://scholars-staging.ango.ai](https://scholars-staging.ango.ai)"
+    process.env.QA_BASE_URL ?? config.environments.staging.url
   ).replace(/\/$/, "");
   
   const planFile = fs.readFileSync("qa-results/test-plan.json", "utf8");

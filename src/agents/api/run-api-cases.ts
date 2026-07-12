@@ -117,7 +117,9 @@ export async function runApiCases() {
 
   const envFile = fs.readFileSync("config/environments.yaml", "utf8");
   const config = yaml.parse(envFile);
-  const apiUrl = String(config.environments.staging.api_url).replace(/\/$/, "");
+  const apiUrl = String(
+    process.env.QA_API_URL ?? config.environments.staging.api_url
+  ).replace(/\/$/, "");
   const setupToken = await getIdTokenForPersona("company_admin");
   const executionContext = await resolveExecutionContext(apiUrl, setupToken);
 

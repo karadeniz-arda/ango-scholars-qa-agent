@@ -299,7 +299,10 @@ async function resolveBrowserExecutionContext(
 ): Promise<BrowserExecutionContext> {
   const envFile = fs.readFileSync("config/environments.yaml", "utf8");
   const config = yaml.parse(envFile);
-  const apiUrl = config.environments.staging.api_url;
+  const apiUrl = String(
+    process.env.QA_API_URL ?? config.environments.staging.api_url
+  ).replace(/\/$/, "");
+
   const companyId = process.env.QA_COMPANY_ID;
   if (!companyId) {
     console.log(" Browser route resolver: QA_COMPANY_ID is missing.");
