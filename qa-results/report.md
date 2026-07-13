@@ -2,25 +2,25 @@
 
 ## Issue
 
-- **Issue:** AS-1123
-- **Plan Issue Key:** AS-1123
-- **Summary:** UI - Add Timesheet Weeks as a Column to the Payments Tab
-- **Generated At:** 2026-07-10T11:33:47.238Z
+- **Issue:** AS-1058
+- **Plan Issue Key:** AS-1058
+- **Summary:** UI - Update Language Proficiency Model to Use Listening, Speaking, Writing, and Reading
+- **Generated At:** 2026-07-13T11:45:12.125Z
 
 ## Plan Notes
 
-GitHub diff/PR is not available for AS-1123 in either imerit-io/ango-scholars-client or imerit-io/ango-scholars-server, so the exact Payments API endpoint, browser route, table component name, column header label, value format (e.g., '4 weeks', '4/4', date range list), and fallback/derivation logic for partial server payloads are not visible in the diff. All paths and routes are therefore marked UNKNOWN and the API contract must be confirmed from the eventual client/server PR before running these cases. Unauthenticated browser coverage is NOT generated because the browser runner does not support unauthenticated execution; an unauthenticated API check (api-5) is included to verify the endpoint requires auth. Per the Jira description, server payloads may be missing or partial timesheet info, so coverage emphasizes that the UI does not leak 'undefined'/'null'/'NaN' strings and that the client must still populate the Timesheet Weeks column (likely by aggregating timesheet records when the server omits the field). No destructive browser actions (Reject, Delete, Submit, etc.) are included; only safe read-only navigation and assertions are used.
+GitHub diff shows the Language.mode enum was updated from 'receptive' | 'productive' to 'listening' | 'speaking' | 'writing' | 'reading'. The client now uses a new LanguageAdjustmentRow component, new i18n keys (listeningLabel, speakingLabel, writingLabel, readingLabel, proficiencyLevelLabel, levelAdjustment, reset, removeLanguage, customProficiencyValue), and the onboarding payload now sends a 'languages' array of CreateTalentLanguageProficiencyDto objects (each with listeningLevel, speakingLevel, writingLevel, readingLevel) instead of legacy 'languageIds'. The server AssessmentService.findOneByCompany now populates 'languages' alongside skills/question. Specific test data IDs (companyId, assessmentId, languageId) are not provided in the Jira or diff, so they are marked UNKNOWN. Unauthenticated browser coverage is not generated because the browser runner does not support unauthenticated execution; the legacy UI strings (Receptive, Productive, receptiveLevelLabel, productiveLevelLabel) should be visually confirmed to be absent on every updated client surface (assessment modal, assessment view, job change request review, talent profile Skills and Languages tab, talent onboarding Languages step).
 
 ## Result Summary
 
 ### API Summary
 
-No results.
+- **BLOCKED:** 12
 
 
 ### Browser Summary
 
-- **PASS:** 5
+- **BLOCKED:** 7
 
 
 ## Result Semantics
@@ -48,22 +48,41 @@ No results.
 
 ## API Results
 
-No API results.
+| Case ID | Persona | Method | Original Path | Resolved Path | Expected | Actual | Result | Reason Category | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| api-1 |company_admin |POST |UNKNOWN |UNKNOWN |201 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-2 |company_admin |POST |UNKNOWN |UNKNOWN |400 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-3 |company_admin |GET |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-4 |company_admin |GET |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-5 |company_admin |POST |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-6 |company_admin |POST |UNKNOWN |UNKNOWN |400 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-7 |company_admin |POST |UNKNOWN |UNKNOWN |400 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-8 |talent |GET |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-9 |talent |PATCH |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-10 |company_admin |GET |UNKNOWN |UNKNOWN |200 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-11 |company_admin |POST |UNKNOWN |UNKNOWN |400 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
+| api-12 |unauthenticated |GET |UNKNOWN |UNKNOWN |401 | |BLOCKED |MISSING_API_CONTEXT |API path contains unresolved setup data: UNKNOWN |
 
 
 ## Browser Results
 
 | Case ID | Persona | Start Route | Result | Reason Category | Evidence / Notes | Goal |
 | --- | --- | --- | --- | --- | --- | --- |
-| web-1 |company_admin |/company/all-payments |PASS |ASSERTIONS_PASSED |qa-results/evidence/web-1-screenshot.png \| wait 1000ms \| could not click top/main tab "Payments" - continuing with assertions \| wait 1000ms \| assert visible "Timesheet Weeks": PASS \| assert not visible "undefined": PASS \| assert not visible "null": PASS |Verify the Payments tab shows a new 'Timesheet Weeks' column with populated values for rows where the server returns the data. |
-| web-2 |talent |/talent/payments |PASS |ASSERTIONS_PASSED |qa-results/evidence/web-2-screenshot.png \| wait 1000ms \| clicked text "Payments" \| wait 1000ms \| assert visible "Timesheet Weeks": PASS \| assert not visible "undefined": PASS \| assert not visible "null": PASS |Verify the talent-facing Payments view also renders the new 'Timesheet Weeks' column with values. |
-| web-3 |company_admin |/company/all-payments |PASS |ASSERTIONS_PASSED |qa-results/evidence/web-3-screenshot.png \| wait 1000ms \| could not click top/main tab "Payments" - continuing with assertions \| wait 1000ms \| assert visible "Timesheet Weeks": PASS \| assert not visible "undefined": PASS \| assert not visible "null": PASS \| assert not visible "NaN": PASS |Verify the Payments tab gracefully handles rows where the server did not return timesheet info, populating the value from available data and never showing 'undefined'/'null'/'NaN'. |
-| web-4 |company_admin |/company/all-payments |PASS |ASSERTIONS_PASSED |qa-results/evidence/web-4-screenshot.png \| setViewport 430x900 \| wait 1000ms \| could not click top/main tab "Payments" - continuing with assertions \| wait 1000ms \| assert visible "Timesheet Weeks": PASS \| assert not visible "undefined": PASS \| assert not visible "null": PASS |Verify the Payments table layout and the new 'Timesheet Weeks' column remain readable on a narrow/mobile viewport. |
-| web-5 |company_admin |/company/all-payments |PASS |ASSERTIONS_PASSED |qa-results/evidence/web-5-screenshot.png \| wait 1000ms \| could not click top/main tab "Payments" - continuing with assertions \| wait 1000ms \| assert visible "Timesheet Weeks": PASS \| assert not visible "undefined": PASS \| assert not visible "null": PASS |Verify navigating into a payment row's detail does not regress and that no 'undefined'/'null' timesheet-weeks values leak into detail headers or summary fields. |
+| web-1 |company_admin |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Assessment Language Requirements modal shows Listening/Speaking/Writing/Reading labels instead of Receptive/Productive |
+| web-2 |company_admin |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Assessment header view shows languages grouped by skill (Listening/Speaking/Writing/Reading) using formatDeclaredLanguageSkillSummary |
+| web-3 |company_admin |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Job change request review language comparison displays the new four-skill summaries and not legacy names |
+| web-4 |talent |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Talent profile Skills and Languages tab shows the language adjustment row using the new four-skill model |
+| web-5 |talent |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Talent onboarding Languages step renders the new compact LanguageAdjustmentRow with four skills |
+| web-6 |company_admin |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Mobile/narrow viewport of the Assessment Language Requirements modal keeps the four-skill labels readable and not clipped |
+| web-7 |talent |UNKNOWN |BLOCKED |MISSING_BROWSER_ROUTE |Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed. |Talent profile Skills and Languages tab on mobile viewport still shows the four new skill labels and never legacy ones |
 
 
 ## Observations
 
+- API cases marked **PASS** matched the expected HTTP status.
+- API cases marked **FAIL** reached the endpoint but did not match the expected product/API expectation.
+- API cases marked **BLOCKED** were not executed because route, setup data, body, persona, or required context was missing.
+- API cases marked **ERROR** failed because of an agent/runtime execution problem.
 - Browser cases marked **PASS** completed all generic browser assertions successfully.
 - Browser cases marked **FAIL** reached the target page but at least one expected product assertion failed.
 - Browser cases marked **MANUAL_REQUIRED** reached a point where human verification is needed because the action is not safely or reliably automatable yet.
