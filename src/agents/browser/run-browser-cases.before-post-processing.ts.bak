@@ -1368,18 +1368,7 @@ export async function runBrowserCases() {
   
   const planFile = fs.readFileSync("qa-results/test-plan.json", "utf8");
   const plan: TestPlan = JSON.parse(cleanJsonFileContent(planFile));
-  const results: any[] = [];
-
-  const pendingEvidenceReviews: Array<{
-    testCase: any;
-    currentStatus:
-      | "FAIL"
-      | "MANUAL_REQUIRED";
-    currentReasonCategory: string;
-    screenshotPath: string;
-    currentUrl: string;
-    notes: string[];
-  }> = [];
+  const results = [];
   
   for (const testCase of (plan.browserCases as any[]) ?? []) {
   const resolvedRoute = await resolveBrowserRoute(plan, testCase);
@@ -1540,6 +1529,21 @@ export async function runBrowserCases() {
       page = await context.newPage();
     }
 
+    let pendingVideoReview: {
+      currentStatus:
+        | "FAIL"
+        | "MANUAL_REQUIRED";
+      currentReasonCategory: string;
+      notes: string[];
+      screenshotReview: NonNullable<
+        Awaited<
+          ReturnType<
+            typeof reviewBrowserEvidence
+          >
+        >
+      >;
+    } | null = null;
+
     try {
       await page.setViewportSize({ width: 1280, height: 720 });
 
@@ -1643,35 +1647,64 @@ if (signedInPersona !== persona) {
       );
 
       let evidenceReview: Awaited<
-        ReturnType<typeof reviewBrowserEvidence>
-      > = null;
+  ReturnType<typeof reviewBrowserEvidence>
+> = null;
 
-      if (
-        stepResult.status === "FAIL" ||
-        stepResult.status ===
-          "MANUAL_REQUIRED"
-      ) {
-        pendingEvidenceReviews.push({
-          testCase,
-          currentStatus:
-            stepResult.status,
-          currentReasonCategory:
-            String(
-              stepResult.reasonCategory ||
-                "BROWSER_ASSERTION_FAILED"
-            ),
-          screenshotPath,
-          currentUrl: page.url(),
-          notes: [
-            ...stepResult.notes,
-          ],
-        });
+if (
+  stepResult.status === "FAIL" ||
+  stepResult.status === "MANUAL_REQUIRED"
+) {
+  evidenceReview =
+    await reviewBrowserEvidence({
+      testCase,
+      currentStatus: stepResult.status,
+      currentReasonCategory:
+        stepResult.reasonCategory,
+      screenshotPath,
+      currentUrl: page.url(),
+      notes: stepResult.notes,
+    });
 
-        console.log(
-          " Evidence review queued " +
-            "for post-processing."
-        );
-      }
+    if (evidenceReview) {
+    console.log(
+      ` Evidence review: ` +
+        `${evidenceReview.verdict} ` +
+        `(${evidenceReview.confidence})`
+    );
+
+    console.log(
+      ` Evidence review rationale: ` +
+        `${evidenceReview.rationale}`
+    );
+
+    if (
+      shouldRunVideoEvidenceReview(
+        evidenceReview
+      )
+    ) {
+      pendingVideoReview = {
+        currentStatus:
+          stepResult.status as
+            | "FAIL"
+            | "MANUAL_REQUIRED",
+        currentReasonCategory:
+          String(
+            stepResult.reasonCategory ||
+              "BROWSER_ASSERTION_FAILED"
+          ),
+        notes: stepResult.notes,
+        screenshotReview:
+          evidenceReview,
+      };
+
+      console.log(
+        " Video fallback queued: " +
+          `${evidenceReview.verdict} ` +
+          `(${evidenceReview.confidence})`
+      );
+    }
+  }
+}
 
       const keyVisibleTexts = await collectKeyVisibleTexts(page);
 
@@ -1685,7 +1718,31 @@ if (signedInPersona !== persona) {
         finalStatus: stepResult.status,
       });
 
-      const evidenceReviewText = "";
+      const evidenceReviewText =
+  evidenceReview
+    ? [
+        `Evidence review verdict: ` +
+          evidenceReview.verdict,
+
+        `Evidence review confidence: ` +
+          evidenceReview.confidence,
+
+        `Evidence review rationale: ` +
+          evidenceReview.rationale,
+
+        evidenceReview.visibleEvidence
+          .length > 0
+          ? `Visible evidence: ` +
+            evidenceReview.visibleEvidence
+              .join("; ")
+          : "",
+
+        `Evidence review recommended status: ` +
+          evidenceReview.recommendedStatus,
+      ]
+        .filter(Boolean)
+        .join(" | ")
+    : "";
 
       const evidenceSummary: BrowserEvidenceSummary = {
         successSignal,
@@ -1737,30 +1794,25 @@ if (signedInPersona !== persona) {
         startRoute: testCase.startRoute,
         evidence: error.message,
       });
-    } finally {
+        } finally {
       const video = page.video();
 
       await page.close().catch(() => {});
 
       const rawVideoPath = video
-        ? await video.path().catch(
-            () => null
-          )
+        ? await video.path().catch(() => null)
         : null;
 
       if (rawVideoPath) {
         const issueKey = String(
-          plan.issueKey ||
-            "unknown-issue"
+          plan.issueKey || "unknown-issue"
         );
 
         const caseVideoPath =
           `qa-results/videos/` +
           `${issueKey}-${testCase.id}.webm`;
 
-        if (
-          fs.existsSync(caseVideoPath)
-        ) {
+        if (fs.existsSync(caseVideoPath)) {
           fs.rmSync(caseVideoPath);
         }
 
@@ -1776,7 +1828,7 @@ if (signedInPersona !== persona) {
           .find(
             (item: any) =>
               item.id === testCase.id
-          );
+          ) as any;
 
         if (currentResult) {
           currentResult.videoPath =
@@ -1791,247 +1843,120 @@ if (signedInPersona !== persona) {
         }
 
         console.log(
-          ` Video finalized: ` +
-            `${caseVideoPath}`
+          ` Video finalized: ${caseVideoPath}`
         );
+
+        if (
+          currentResult &&
+          pendingVideoReview &&
+          shouldRunVideoEvidenceReview(
+            pendingVideoReview
+              .screenshotReview
+          )
+        ) {
+          const videoEvidenceReview =
+            await reviewBrowserVideoEvidence({
+              issueKey,
+              testCase,
+              currentStatus:
+                pendingVideoReview
+                  .currentStatus,
+              currentReasonCategory:
+                pendingVideoReview
+                  .currentReasonCategory,
+              notes:
+                pendingVideoReview.notes,
+              videoPath:
+                caseVideoPath,
+              screenshotReview:
+                pendingVideoReview
+                  .screenshotReview,
+            });
+
+          if (videoEvidenceReview) {
+            currentResult.videoEvidenceReview =
+              videoEvidenceReview;
+
+            const videoReviewText = [
+              "Video fallback triggered: true",
+
+              `Video review verdict: ` +
+                videoEvidenceReview.verdict,
+
+              `Video review confidence: ` +
+                videoEvidenceReview
+                  .confidence,
+
+              `Video review rationale: ` +
+                videoEvidenceReview
+                  .rationale,
+
+              videoEvidenceReview
+                .resolvedFailures.length > 0
+                ? `Resolved failures: ` +
+                  videoEvidenceReview
+                    .resolvedFailures
+                    .join("; ")
+                : "Resolved failures: none",
+
+              videoEvidenceReview
+                .unresolvedFailures.length > 0
+                ? `Unresolved failures: ` +
+                  videoEvidenceReview
+                    .unresolvedFailures
+                    .join("; ")
+                : "Unresolved failures: none",
+
+              videoEvidenceReview
+                .temporalEvidence.length > 0
+                ? `Temporal evidence: ` +
+                  videoEvidenceReview
+                    .temporalEvidence
+                    .join("; ")
+                : "",
+
+              `Frame paths: ` +
+                videoEvidenceReview
+                  .framePaths
+                  .join(", "),
+
+              `Video recommended status: ` +
+                videoEvidenceReview
+                  .recommendedStatus,
+
+              `Resolved by video: ` +
+                videoEvidenceReview
+                  .resolvedByVideo,
+            ]
+              .filter(Boolean)
+              .join(" | ");
+
+            currentResult.evidence = [
+              currentResult.evidence,
+              videoReviewText,
+            ]
+              .filter(Boolean)
+              .join(" | ");
+
+            console.log(
+              ` Video evidence review: ` +
+                `${videoEvidenceReview.verdict} ` +
+                `(${videoEvidenceReview.confidence})`
+            );
+
+            console.log(
+              ` Video resolved by fallback: ` +
+                `${videoEvidenceReview.resolvedByVideo}`
+            );
+          }
+        }
       }
     }
   }
-
+  
   await context.close();
   await browser.close();
   await stagehand.close();
-
-  console.log(
-    "\nBrowser automation completed."
-  );
-
-  if (
-    pendingEvidenceReviews.length > 0
-  ) {
-    console.log(
-      "Evidence post-processing starting..."
-    );
-  }
-
-  for (
-    const pendingReview
-    of pendingEvidenceReviews
-  ) {
-    const currentResult = [
-      ...results,
-    ]
-      .reverse()
-      .find(
-        (item: any) =>
-          item.id ===
-          pendingReview.testCase.id
-      );
-
-    if (!currentResult) {
-      continue;
-    }
-
-    const evidenceReview =
-      await reviewBrowserEvidence({
-        testCase:
-          pendingReview.testCase,
-        currentStatus:
-          pendingReview.currentStatus,
-        currentReasonCategory:
-          pendingReview
-            .currentReasonCategory,
-        screenshotPath:
-          pendingReview.screenshotPath,
-        currentUrl:
-          pendingReview.currentUrl,
-        notes:
-          pendingReview.notes,
-      });
-
-    if (!evidenceReview) {
-      continue;
-    }
-
-    currentResult.evidenceReview =
-      evidenceReview;
-
-    console.log(
-      ` Evidence review: ` +
-        `${evidenceReview.verdict} ` +
-        `(${evidenceReview.confidence})`
-    );
-
-    console.log(
-      ` Evidence review rationale: ` +
-        `${evidenceReview.rationale}`
-    );
-
-    const evidenceReviewText = [
-      `Evidence review verdict: ` +
-        evidenceReview.verdict,
-
-      `Evidence review confidence: ` +
-        evidenceReview.confidence,
-
-      `Evidence review rationale: ` +
-        evidenceReview.rationale,
-
-      evidenceReview.visibleEvidence
-        .length > 0
-        ? `Visible evidence: ` +
-          evidenceReview
-            .visibleEvidence
-            .join("; ")
-        : "",
-
-      `Evidence review recommended status: ` +
-        evidenceReview
-          .recommendedStatus,
-    ]
-      .filter(Boolean)
-      .join(" | ");
-
-    currentResult.evidence = [
-      currentResult.evidence,
-      evidenceReviewText,
-    ]
-      .filter(Boolean)
-      .join(" | ");
-
-    if (
-      !shouldRunVideoEvidenceReview(
-        evidenceReview
-      )
-    ) {
-      continue;
-    }
-
-    console.log(
-      " Video fallback queued: " +
-        `${evidenceReview.verdict} ` +
-        `(${evidenceReview.confidence})`
-    );
-
-    const videoPath = String(
-      currentResult.videoPath || ""
-    );
-
-    if (
-      !videoPath ||
-      !fs.existsSync(videoPath)
-    ) {
-      console.log(
-        " Video fallback skipped: " +
-          "case video is unavailable."
-      );
-
-      continue;
-    }
-
-    const issueKey = String(
-      plan.issueKey ||
-        "unknown-issue"
-    );
-
-    const videoEvidenceReview =
-      await reviewBrowserVideoEvidence({
-        issueKey,
-        testCase:
-          pendingReview.testCase,
-        currentStatus:
-          pendingReview.currentStatus,
-        currentReasonCategory:
-          pendingReview
-            .currentReasonCategory,
-        notes:
-          pendingReview.notes,
-        videoPath,
-        screenshotReview:
-          evidenceReview,
-      });
-
-    if (!videoEvidenceReview) {
-      continue;
-    }
-
-    currentResult.videoEvidenceReview =
-      videoEvidenceReview;
-
-    const videoReviewText = [
-      "Video fallback triggered: true",
-
-      `Video review verdict: ` +
-        videoEvidenceReview.verdict,
-
-      `Video review confidence: ` +
-        videoEvidenceReview.confidence,
-
-      `Video review rationale: ` +
-        videoEvidenceReview.rationale,
-
-      videoEvidenceReview
-        .resolvedFailures.length > 0
-        ? `Resolved failures: ` +
-          videoEvidenceReview
-            .resolvedFailures
-            .join("; ")
-        : "Resolved failures: none",
-
-      videoEvidenceReview
-        .unresolvedFailures.length > 0
-        ? `Unresolved failures: ` +
-          videoEvidenceReview
-            .unresolvedFailures
-            .join("; ")
-        : "Unresolved failures: none",
-
-      videoEvidenceReview
-        .temporalEvidence.length > 0
-        ? `Temporal evidence: ` +
-          videoEvidenceReview
-            .temporalEvidence
-            .join("; ")
-        : "",
-
-      `Frame paths: ` +
-        videoEvidenceReview
-          .framePaths
-          .join(", "),
-
-      `Video recommended status: ` +
-        videoEvidenceReview
-          .recommendedStatus,
-
-      `Resolved by video: ` +
-        videoEvidenceReview
-          .resolvedByVideo,
-    ]
-      .filter(Boolean)
-      .join(" | ");
-
-    currentResult.evidence = [
-      currentResult.evidence,
-      videoReviewText,
-    ]
-      .filter(Boolean)
-      .join(" | ");
-
-    console.log(
-      ` Video evidence review: ` +
-        `${videoEvidenceReview.verdict} ` +
-        `(${videoEvidenceReview.confidence})`
-    );
-
-    console.log(
-      ` Video resolved by fallback: ` +
-        `${videoEvidenceReview.resolvedByVideo}`
-    );
-  }
-
-  console.log(
-    "\nBrowser tests are completed"
-  );
-
+  console.log("\nBrowser tests are completed");
   return results;
 }

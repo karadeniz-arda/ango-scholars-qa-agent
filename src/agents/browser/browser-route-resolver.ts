@@ -9,6 +9,7 @@ type DesiredJobStatus = "active" | "closed" | "draft";
 type BrowserExecutionContext = {
   companyId?: string | undefined;
   projectId?: string | undefined;
+  assessmentId?: string | undefined;
   jobs?: any[] | undefined;
 };
 
@@ -136,6 +137,8 @@ function extractItems(data: any): any[] {
     data.results,
     data.data,
     data.projects,
+    data.assessments,
+    data.data?.assessments,
     data.jobs,
     data.rows,
     data.data?.items,
@@ -316,6 +319,76 @@ async function apiGet(apiUrl: string, path: string, idToken: string) {
   }
 }
 
+function getAssessmentId(
+  assessment: any
+): string | undefined {
+  const id =
+    assessment?.assessmentId ??
+    assessment?.id ??
+    assessment?._id;
+
+  if (
+    id === undefined ||
+    id === null ||
+    String(id).trim() === ""
+  ) {
+    return undefined;
+  }
+
+  return String(id);
+}
+
+async function resolveAssessmentId(
+  apiUrl: string,
+  idToken: string,
+  companyId: string
+): Promise<string | undefined> {
+  const candidatePaths = [
+    `/companies/${companyId}/assessments?limit=100&offset=0`,
+    `/companies/${companyId}/assessments`,
+  ];
+
+  for (const path of candidatePaths) {
+    const data = await apiGet(
+      apiUrl,
+      path,
+      idToken
+    );
+
+    const assessments = extractItems(data);
+
+    const selectedAssessment =
+      assessments.find((assessment) => {
+        const id = getAssessmentId(assessment);
+        const status = String(
+          assessment?.status || ""
+        ).toLowerCase();
+
+        return (
+          Boolean(id) &&
+          !["deleted", "archived"].includes(status)
+        );
+      }) ?? assessments.find(getAssessmentId);
+
+    const assessmentId =
+      getAssessmentId(selectedAssessment);
+
+    if (assessmentId) {
+      console.log(
+        ` Browser route resolver selected assessmentId=${assessmentId} from ${path}`
+      );
+
+      return assessmentId;
+    }
+
+    console.log(
+      ` Browser route resolver found no usable assessmentId from ${path}`
+    );
+  }
+
+  return undefined;
+}
+
 async function resolveProjectId(
   apiUrl: string,
   idToken: string,
@@ -386,16 +459,37 @@ async function resolveBrowserExecutionContext(
     return {};
   }
 
-  const idToken = await getFirebaseIdToken(persona);
-  const projectId = await resolveProjectId(apiUrl, idToken, companyId);
+const idToken =
+  await getFirebaseIdToken(persona);
+
+const assessmentId =
+  await resolveAssessmentId(
+    apiUrl,
+    idToken,
+    companyId
+  );
+
+const projectId = await resolveProjectId(
+  apiUrl,
+  idToken,
+  companyId
+);
 
   if (!projectId) {
-    return { companyId };
-  }
+  return {
+    companyId,
+    assessmentId,
+  };
+}
 
   const jobs = await resolveJobs(apiUrl, idToken, companyId, projectId);
 
-  return { companyId, projectId, jobs };
+  return {
+  companyId,
+  projectId,
+  assessmentId,
+  jobs,
+};
 }
 
 async function getCachedBrowserExecutionContext(
@@ -461,8 +555,31 @@ export async function resolveBrowserRoute(
   }
 
   const persona = String(testCase.persona || "") as BrowserPersona;
-  const caseText = getCaseText(testCase);
   const planText = getPlanText(plan);
+  const caseText = getCaseText(testCase);
+
+if (caseText.includes("assessment")) {
+  const context =
+    await getCachedBrowserExecutionContext(
+      persona
+    );
+
+  if (!context.assessmentId) {
+    console.log(
+      ` Browser route resolver could not resolve assessmentId for ${testCase.id}.`
+    );
+
+    return "UNKNOWN";
+  }
+
+  if (persona === "company_admin") {
+    return `/company/assessments/${context.assessmentId}`;
+  }
+
+  if (persona === "talent") {
+    return `/talent/assessments/${context.assessmentId}/prepare`;
+  }
+}
 
   /**
    * 1. Deep talent contract flows should NOT be mapped to /talent/jobs.

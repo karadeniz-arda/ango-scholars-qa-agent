@@ -60,6 +60,12 @@ const issueId = getArg("--issue") || getArg("--fixture");
     } else if (command === "smoke") {
       console.log("\nSmoke Test starting...");
 
+      if (command === "smoke" && !fs.existsSync("qa-results/test-plan.json")) {
+  console.error(
+    "No valid qa-results/test-plan.json found. Run plan first, and do not run smoke if plan generation failed."
+  );
+  process.exit(1);
+}
       const apiResults = await runApiCases();
       const browserResults = await runBrowserCases();
       const plan = readCurrentPlan();

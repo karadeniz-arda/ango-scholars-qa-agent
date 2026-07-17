@@ -1,3 +1,5 @@
+import { findRouteCandidatesFromCatalog } from "./ui-route-catalog.js";
+
 export type RouteConfidence = "high" | "medium" | "low";
 
 export type RouteCandidate = {
@@ -17,6 +19,41 @@ function normalizeRoute(route: string): string {
   return route.trim().replace(/["'`),.;]+$/, "");
 }
 
+function routeMatchesPersona(route: string, persona: string): boolean {
+  if (persona === "company_admin") {
+    return route.startsWith("/company");
+  }
+
+  if (persona === "talent") {
+    return route.startsWith("/talent");
+  }
+
+  return true;
+}
+
+function requiresDeepUiContext(testCase: any): boolean {
+  const text = [
+    testCase?.goal,
+    testCase?.successCriteria,
+    ...(Array.isArray(testCase?.steps)
+      ? testCase.steps.map((step: any) => `${step.action || ""} ${step.text || ""}`)
+      : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    text.includes("modal") ||
+    text.includes("details") ||
+    text.includes("detail") ||
+    text.includes("contract") ||
+    text.includes("upload") ||
+    text.includes("reupload") ||
+    text.includes("review")
+  );
+}
+
 function isConcreteExecutableRoute(route: string): boolean {
   if (!route.startsWith("/")) return false;
 
@@ -26,6 +63,14 @@ function isConcreteExecutableRoute(route: string): boolean {
     route.includes("{") ||
     route.includes("}")
   ) {
+    return false;
+  }
+
+  if (/:[A-Za-z0-9_]+/.test(route) || route.includes("$")) {
+    return false;
+  }
+
+  if (route === "/company" || route === "/talent" || route === "/admin") {
     return false;
   }
 
@@ -92,23 +137,31 @@ function collectCaseText(testCase: any): string {
     .join("\n");
 }
 
-function extractLiteralRoutes(text: string): RouteCandidate[] {
+function extractLiteralRoutes(text: string, persona: string): RouteCandidate[] {
   const candidates: RouteCandidate[] = [];
 
   const routeRegex =
-    /(?:^|[\s"'`(])((?:\/(?:company|talent|admin)[A-Za-z0-9_?&=/:{}.-]*))/g;
+    /(?:^|[\s"'`(])((?:\/(?:company|talent|admin)[A-Za-z0-9_/$?&=.:{}-]*))/g;
 
   for (const match of text.matchAll(routeRegex)) {
     const route = normalizeRoute(match[1] ?? "");
 
     if (!route) continue;
 
+    if (!routeMatchesPersona(route, persona)) {
+      continue;
+    }
+
+    if (!isConcreteExecutableRoute(route)) {
+      continue;
+    }
+
     candidates.push({
       route,
-      confidence: route.includes("{") ? "low" : "high",
+      confidence: "high",
       source: "literal-route",
       reason:
-        "A concrete browser route-like string was found in Jira/GitHub/planner context.",
+        "A concrete browser route-like string was found in the current test case context.",
     });
   }
 
@@ -301,27 +354,41 @@ export function discoverBrowserRouteCandidates(
   plan: any,
   testCase: any
 ): RouteCandidate[] {
-  const fullText = collectFullText(plan, testCase);
+  const caseText = collectCaseText(testCase);
+  const persona = String(testCase?.persona || "");
 
   const candidates = [
-    ...extractLiteralRoutes(fullText),
+    ...findRouteCandidatesFromCatalog(plan, testCase),
+    ...extractLiteralRoutes(caseText, persona),
     ...inferFeatureAreaRoutes(testCase),
   ];
 
   return uniqByRoute(candidates).sort(
     (a, b) => confidenceScore[b.confidence] - confidenceScore[a.confidence]
   );
-}
+}2
 
 export function getBestDiscoveredBrowserRoute(
   plan: any,
   testCase: any
 ): RouteCandidate | undefined {
   const candidates = discoverBrowserRouteCandidates(plan, testCase);
+  const persona = String(testCase?.persona || "");
+  const needsDeepContext = requiresDeepUiContext(testCase);
 
-  return candidates.find(
-    (candidate) =>
-      candidate.confidence !== "low" &&
-      isConcreteExecutableRoute(candidate.route)
-  );
+  return candidates.find((candidate) => {
+    if (candidate.confidence === "low") return false;
+    if (!isConcreteExecutableRoute(candidate.route)) return false;
+    if (!routeMatchesPersona(candidate.route, persona)) return false;
+
+    if (
+      needsDeepContext &&
+      candidate.source === "ui-route-catalog" &&
+      candidate.confidence !== "high"
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }

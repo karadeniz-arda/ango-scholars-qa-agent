@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { TestPlan } from "../planner/types.js";
+import { buildPolishedReportSections } from "./failure-learning.js";
 
 type TestResult = {
   id: string;
@@ -181,6 +182,12 @@ export function writeReport({
 ## Plan Notes
 
 ${(plan as any).notes ?? "No plan-level notes."}
+
+${buildPolishedReportSections({
+  issueKey: issueId,
+  apiResults,
+  browserResults,
+})}
 
 ## Result Summary
 

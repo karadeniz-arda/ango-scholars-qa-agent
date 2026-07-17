@@ -8,6 +8,8 @@
     "run": "tsx src/cli.ts run",
     "smoke": "tsx src/cli.ts smoke",
     "browser": "tsx src/cli.ts browser",
+    "discover:routes": "tsx src/discovery/build-ui-routes-manifest.ts",
+    "discover:api": "tsx src/discovery/build-api-endpoints-manifest.ts",
     "server": "tsx src/server.ts"
   },
   "keywords": [],

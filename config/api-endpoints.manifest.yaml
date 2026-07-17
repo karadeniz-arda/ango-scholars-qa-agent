@@ -1,0 +1,1277 @@
+generatedAt: 2026-07-14T11:58:45.200Z
+sourceRoots:
+  - /Users/ardakaradeniz/Desktop/staj/staj_ilk_task/ango-scholars-client
+endpoints:
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions/{assessmentSubmissionId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - assessmentSubmissionId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions/{assessmentSubmissionId}/allow-retake
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - assessmentSubmissionId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions/{assessmentSubmissionId}/finalize
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - assessmentSubmissionId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions/{assessmentSubmissionId}/reevaluate
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - assessmentSubmissionId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessment-submissions/find-bulk
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessments
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessments/{assessmentId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - assessmentId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/assessments/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/assessments
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/assessments/{assessmentId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+      - assessmentId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/assessment-submissions/{assessmentId}/start
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - assessmentId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/assessment-submissions/{assessmentSubmissionId}/submit
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - assessmentSubmissionId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/assessment-submissions/my
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/assessments
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/assessments/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: assessments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/contracts
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: contracts
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/contracts/{id}/extend
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: contracts
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/contracts/{id}/terminate
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: contracts
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/contracts
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: contracts
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/contracts/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: contracts
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements/{id}/jobs/{jobId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/{id}/status
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/bulk-move-stage
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/bulk-reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/bulk-unreject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/external-invite
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/job-applications/invite
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs/{jobId}/change-requests
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs/{jobId}/change-requests/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - jobId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs/{jobId}/change-requests/{id}/apply
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - jobId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs/{jobId}/change-requests/{id}/reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - jobId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/jobs/change-requests
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{id}/close
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/application-stages
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/export-csv
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/watchers
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/watchers/me
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/draft
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/publish
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /public/jobs/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - id
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/job-applications
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/job-applications/my
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/job-applications/start
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/jobs/{jobId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - jobId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/jobs/search
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: jobs
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/languages/{languageId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+      - languageId
+    area: languages
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/languages/{languageId}/vet
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+      - languageId
+    area: languages
+    source: source-scan
+  - method: GET
+    path: /languages
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: languages
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers/{id}/withdraw
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers/bulk-instant-send
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers/bulk-send
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers/bulk-withdraw
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/offers/instant-send
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers/{id}/respond
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers/{offerId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - offerId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers/{offerId}/compliance/requirements
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - offerId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers/{offerId}/compliance/requirements/{requirementId}/background-check/start
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - offerId
+      - requirementId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/offers/{offerId}/compliance/requirements/{requirementId}/sign
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - offerId
+      - requirementId
+    area: offers
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/{timesheetId}/approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - timesheetId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/{timesheetId}/entries/{entryId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - timesheetId
+      - entryId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/{timesheetId}/reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - timesheetId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/bulk-approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/bulk-reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/timesheets/export-csv
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/{timesheetId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - timesheetId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/{timesheetId}/request-review
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - timesheetId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/active-timer
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/entries/{entryId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - entryId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/start-timer
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/stop-timer
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/timer-entries
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/timesheets/unit-entries
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: projects
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: projects
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/skills
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/projects/{projectId}/jobs/{jobId}/skills/{skillId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - projectId
+      - jobId
+      - skillId
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/skills/{skillId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+      - skillId
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/skills/{skillId}/vet
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+      - skillId
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /skills
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /skills/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - id
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /skills/bulk
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /skills/export-csv
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: skills
+    source: source-scan
+  - method: GET
+    path: /auth/me
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /auth/oob-signin
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/activity-logs
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-member-invitations
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-member-invitations/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-member-invitations/{id}/resend
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-member-roles
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-member-roles/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-members
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/company-members/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements/{familyId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements/{familyId}/versions
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements/by-family/{familyId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-requirements/by-id/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-signatures
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-signatures/{signatureId}/approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - signatureId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-signatures/{signatureId}/reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - signatureId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/compliance-signatures/bulk-evaluate
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/email-logs
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/emails/send-bulk
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}/approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}/cancel
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/export-csv
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/on-demand
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/proctoring-sessions
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/proctoring-sessions/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/proctoring-sessions/{id}/files/signed-read-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/proctoring-sessions/{id}/status
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/questions
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/questions-submissions/{questionSubmissionId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - questionSubmissionId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/questions-submissions/{questionSubmissionId}/score
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - questionSubmissionId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/questions/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/status
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/work-authorization
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talents/{talentId}/work-authorization/latest
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/trolley/expire-verifications
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/trolley/status/{talentId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talent/{talentId}/storage/signed-read-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talent/{talentId}/storage/signed-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talent/storage/resume/signed-url
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/availability
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/availability/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/deel/invite-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/invoices
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/invoices/{invoiceId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - invoiceId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/proctoring-sessions/{id}/finish
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/proctoring-sessions/{id}/start
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - id
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/proctoring-sessions/initialize
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/proctoring-sessions/upload-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/question-submissions
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/trolley/status
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/trolley/widget-url
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/work-authorization
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/work-authorization/latest
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/dashboard
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/me
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /talents/parse-resume
+    file: src/api/data/scholars-server.ts
+    params: []
+    area: unknown
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talent-job-work-setups
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talent-job-work-setups/{talentJobWorkSetupId}/approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentJobWorkSetupId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/talent-job-work-setups/{talentJobWorkSetupId}/reject
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - talentJobWorkSetupId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups/{familyId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups/{familyId}/versions
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups/{id}/jobs/{jobId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+      - jobId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups/by-family/{familyId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - familyId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/work-setups/by-id/{id}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - id
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/work-setups
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: work-setups
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/work-setups/{workSetupId}/submit
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - workSetupId
+    area: work-setups
+    source: source-scan

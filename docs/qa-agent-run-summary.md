@@ -40,3 +40,17 @@ Issues tested without adding issue-specific/custom logic:
 3. Add reusable dropdown/select capability.
 4. Add runId-based artifact folders.
 5. Add test data resolver for IDs needed by deep flows.
+## Evidence Review V2
+
+Browser `FAIL` ve `MANUAL_REQUIRED` sonuçları önce screenshot tabanlı multimodal evidence review ile incelenir.
+
+Video fallback yalnızca screenshot review sonucu `INCONCLUSIVE` olduğunda veya confidence `low` olduğunda çalışır. Her executable browser case için ayrı video oluşturulur ve deterministic olarak `qa-results/videos/<ISSUE>-<CASE>.webm` yoluna kaydedilir.
+
+Video reviewer, failed assertion'ları `resolvedFailures` ve `unresolvedFailures` olarak ayrı ayrı değerlendirir. Herhangi bir failure açıklanamıyorsa overall verdict güvenli biçimde `INCONCLUSIVE` kalır ve `resolvedByVideo` false olur.
+
+Evidence reviewer sonuçları ana browser runner status'unu otomatik değiştirmez; yalnızca verdict, rationale, evidence ve recommended status üretir.
+
+Targeted doğrulamalar:
+
+- `AS-1073 web-2`: screenshot review `TEST_DATA_ISSUE (high)`; video fallback tetiklenmez.
+- `AS-1165 web-1`: screenshot review `INCONCLUSIVE (medium)`; video fallback tetiklenir, unresolved failures nedeniyle `INCONCLUSIVE / MANUAL_REQUIRED / resolvedByVideo=false` kalır.

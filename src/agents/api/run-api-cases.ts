@@ -3,14 +3,17 @@ import yaml from "yaml";
 import type { TestPlan } from "../../planner/types.js";
 import { getIdTokenForPersona } from "../../auth/firebase.js";
 import { resolveExecutionContext, type ExecutionContext } from "./setup-resolver.js";
+import { findApiEndpointCandidateFromCatalog } from "../../discovery/api-endpoint-catalog.js";
 
 type SupportedPersona = "company_admin" | "talent" | "unauthenticated";
 
 type ApiExecutionContext = ExecutionContext & {
+  jobId?: string | undefined;
   workSetupId?: string | undefined;
   familyId?: string | undefined;
   talentId?: string | undefined;
   talentJobWorkSetupId?: string | undefined;
+  assessmentId?: string | undefined;
   id?: string | undefined;
 };
 
@@ -26,6 +29,35 @@ function normalizeBaseUrl(url: string): string {
 
 function getCaseNotes(testCase: any): string {
   return testCase.notes || testCase.expect?.notes || testCase.expect?.note || "";
+}
+
+function isUnknownPathWithOptionalQuery(path: string): boolean {
+  const trimmed = String(path || "").trim();
+
+  if (!trimmed) return true;
+
+  const [basePath] = trimmed.split("?");
+
+  return String(basePath || "").trim().toUpperCase() === "UNKNOWN";
+}
+
+function mergeCandidatePathWithOriginalQuery(
+  originalPath: string,
+  candidatePath: string
+): string {
+  const queryIndex = String(originalPath || "").indexOf("?");
+
+  if (queryIndex === -1) {
+    return candidatePath;
+  }
+
+  const query = originalPath.slice(queryIndex);
+
+  if (!query || query === "?") {
+    return candidatePath;
+  }
+
+  return `${candidatePath}${query}`;
 }
 
 function extractItems(data: any): any[] {
@@ -47,6 +79,8 @@ function extractItems(data: any): any[] {
     data.data?.items,
     data.data?.results,
     data.data?.rows,
+    data.assessments,
+    data.data?.assessments,
     data.data?.workSetups,
     data.data?.work_setups,
   ];
@@ -63,6 +97,133 @@ function firstString(...values: any[]): string | undefined {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       return String(value);
     }
+  }
+
+  return undefined;
+}
+
+function getJobId(job: any): string | undefined {
+  return firstString(job?.id, job?.jobId, job?._id);
+}
+
+function selectBestJob(jobs: any[]): any | undefined {
+  const withId = jobs.filter((job) => getJobId(job));
+
+  if (withId.length === 0) return undefined;
+
+  const preferred = withId.find((job) => {
+    const status = String(job?.status || "").toLowerCase();
+    const visibility = String(job?.visibility || "").toLowerCase();
+
+    return (
+      !["closed", "archived", "deleted"].includes(status) &&
+      visibility !== "private"
+    );
+  });
+
+  return preferred ?? withId[0];
+}
+
+async function resolveJobIdFromRuntime(
+  apiUrl: string,
+  setupToken: string,
+  context: ApiExecutionContext
+): Promise<string | undefined> {
+  if (!context.companyId) return undefined;
+
+  const candidatePaths = [
+    context.projectId
+      ? `/companies/${context.companyId}/jobs?projectId=${context.projectId}&limit=100&offset=0`
+      : undefined,
+    `/companies/${context.companyId}/jobs?limit=100&offset=0`,
+  ].filter(Boolean) as string[];
+
+  for (const path of candidatePaths) {
+    const jobsData = await apiGet(apiUrl, path, setupToken);
+    const jobs = extractItems(jobsData);
+    const selectedJob = selectBestJob(jobs);
+    const jobId = getJobId(selectedJob);
+
+    if (jobId) {
+      console.log(`API context resolver selected jobId=${jobId} from ${path}`);
+      return jobId;
+    }
+
+    console.log(`API context resolver found no usable jobId from ${path}`);
+  }
+
+  return undefined;
+}
+
+function getAssessmentId(assessment: any): string | undefined {
+  return firstString(
+    assessment?.id,
+    assessment?.assessmentId,
+    assessment?._id
+  );
+}
+
+function selectBestAssessment(
+  assessments: any[]
+): any | undefined {
+  const withId = assessments.filter((assessment) =>
+    getAssessmentId(assessment)
+  );
+
+  if (withId.length === 0) {
+    return undefined;
+  }
+
+  const preferred = withId.find((assessment) => {
+    const status = String(
+      assessment?.status || ""
+    ).toLowerCase();
+
+    return !["deleted", "archived"].includes(status);
+  });
+
+  return preferred ?? withId[0];
+}
+
+async function resolveAssessmentIdFromRuntime(
+  apiUrl: string,
+  setupToken: string,
+  context: ApiExecutionContext
+): Promise<string | undefined> {
+  if (!context.companyId) {
+    return undefined;
+  }
+
+  const candidatePaths = [
+    `/companies/${context.companyId}/assessments?limit=100&offset=0`,
+    `/companies/${context.companyId}/assessments`,
+  ];
+
+  for (const path of candidatePaths) {
+    const assessmentsData = await apiGet(
+      apiUrl,
+      path,
+      setupToken
+    );
+
+    const assessments = extractItems(assessmentsData);
+    const selectedAssessment =
+      selectBestAssessment(assessments);
+
+    const assessmentId =
+      getAssessmentId(selectedAssessment);
+
+    if (assessmentId) {
+      console.log(
+        `API context resolver selected assessmentId=${assessmentId} from ${path}`
+      );
+
+      return assessmentId;
+    }
+
+    console.log(
+      `API context resolver found no usable assessmentId from ${path}`
+    );
   }
 
   return undefined;
@@ -95,6 +256,88 @@ async function apiGet(
   } catch {
     return undefined;
   }
+}
+
+function firstId(...values: any[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+
+  return undefined;
+}
+
+function extractOwnTalentId(data: any): string | undefined {
+  const directId = firstId(
+    data?.talentId,
+    data?.talent?.id,
+    data?.talent?.talentId,
+    data?.profile?.talentId,
+    data?.profile?.id,
+    data?.user?.talentId,
+    data?.user?.talent?.id,
+    data?.id
+  );
+
+  if (directId) {
+    return directId;
+  }
+
+  const items = extractItems(data);
+
+  for (const item of items) {
+    const itemId = firstId(
+      item?.talentId,
+      item?.talent?.id,
+      item?.talent?.talentId,
+      item?.profile?.talentId,
+      item?.id
+    );
+
+    if (itemId) {
+      return itemId;
+    }
+  }
+
+  return undefined;
+}
+
+async function resolveOwnTalentIdFromRuntime(
+  apiUrl: string,
+  talentToken: string
+): Promise<string | undefined> {
+  const candidatePaths = [
+    "/talents/me",
+    "/talent/me",
+    "/talents/profile",
+    "/talent/profile",
+    "/users/me",
+    "/auth/me",
+    "/me",
+  ];
+
+  for (const path of candidatePaths) {
+    const data = await apiGet(apiUrl, path, talentToken);
+    const talentId = extractOwnTalentId(data);
+
+    if (talentId) {
+      console.log(
+        `API context resolver selected own talentId=${talentId} from ${path}`
+      );
+      return talentId;
+    }
+  }
+
+  console.log(
+    "API context resolver could not resolve own talentId for talent persona"
+  );
+
+  return undefined;
 }
 
 async function enrichExecutionContext(
@@ -196,6 +439,27 @@ async function enrichExecutionContext(
     console.log("API context resolver did not find any talent-job-work-setup item.");
   }
 
+  if (!context.jobId) {
+    const resolvedJobId = await resolveJobIdFromRuntime(
+  apiUrl,
+  setupToken,
+  context
+);
+
+if (!context.assessmentId) {
+  context.assessmentId =
+    await resolveAssessmentIdFromRuntime(
+      apiUrl,
+      setupToken,
+      context
+    );
+}
+
+if (resolvedJobId) {
+  context.jobId = resolvedJobId;
+}
+  }
+
   return context;
 }
 
@@ -231,6 +495,14 @@ function resolveUnknownQueryParams(
       continue;
     }
 
+    if (
+  key === "assessmentId" &&
+  context.assessmentId
+) {
+  params.set(key, context.assessmentId);
+  continue;
+}
+
     if (key === "talentId" && context.talentId) {
       params.set(key, context.talentId);
       continue;
@@ -250,6 +522,7 @@ function resolvePath(path: string, context: ApiExecutionContext): string {
   const replacements: Record<string, string | undefined> = {
     companyId: context.companyId,
     projectId: context.projectId,
+    assessmentId: context.assessmentId,
     jobId: context.jobId,
     id: context.id ?? context.workSetupId,
     workSetupId: context.workSetupId,
@@ -323,6 +596,7 @@ function resolveBodyValue(value: any, context: ApiExecutionContext): any {
     companyId: context.companyId,
     projectId: context.projectId,
     jobId: context.jobId,
+    assessmentId: context.assessmentId,
     id: context.id ?? context.workSetupId,
     workSetupId: context.workSetupId,
     familyId: context.familyId,
@@ -427,6 +701,35 @@ export async function runApiCases() {
 
   console.log("Execution context:", executionContext);
 
+    const talentExecutionContext: ApiExecutionContext = {
+    ...executionContext,
+  };
+
+  /**
+   * Do not reuse company-side talentId for talent persona cases.
+   * It may belong to a different talent than the talent auth token.
+   */
+  delete talentExecutionContext.talentId;
+
+  try {
+    const talentSetupToken = await getIdTokenForPersona("talent");
+    const ownTalentId = await resolveOwnTalentIdFromRuntime(
+      apiUrl,
+      talentSetupToken
+    );
+
+    if (ownTalentId) {
+      talentExecutionContext.talentId = ownTalentId;
+    }
+  } catch (error) {
+    console.log(
+      "API context resolver could not prepare talent execution context:",
+      error
+    );
+  }
+
+  console.log("Talent execution context:", talentExecutionContext);
+
   const planFile = fs.readFileSync("qa-results/test-plan.json", "utf8");
   const cleanPlanFile = planFile
     .replace(/```json/g, "")
@@ -437,15 +740,47 @@ export async function runApiCases() {
   const results = [];
 
   for (const rawTestCase of plan.apiCases as any[]) {
-    const testCase = resolveTestCase(rawTestCase, executionContext);
+    const catalogResolvedRawTestCase = { ...rawTestCase };
+    const originalRawPath = String(rawTestCase.path || "UNKNOWN").trim();
 
+    if (isUnknownPathWithOptionalQuery(originalRawPath)) {
+      const candidate = findApiEndpointCandidateFromCatalog(plan, rawTestCase);
+
+      if (candidate && candidate.confidence !== "low") {
+        const resolvedCatalogPath = mergeCandidatePathWithOriginalQuery(
+          originalRawPath,
+          candidate.path
+        );
+
+        console.log(
+          ` API catalog selected path for ${rawTestCase.id}: ${originalRawPath} -> ${resolvedCatalogPath} (${candidate.confidence})`
+        );
+        console.log(` API catalog reason: ${candidate.reason}`);
+
+        catalogResolvedRawTestCase.path = resolvedCatalogPath;
+      }
+    }
+
+    const rawPersona = String(rawTestCase.persona || "").trim();
+
+    const executionContextForCase =
+      rawPersona === "talent" ? talentExecutionContext : executionContext;
+
+    const testCase = resolveTestCase(
+      catalogResolvedRawTestCase,
+      executionContextForCase
+    );
     const method = String(testCase.method || "").trim().toUpperCase();
     const path = String(testCase.path || "").trim();
     const persona = String(testCase.persona || "").trim();
 
     console.log(`Testing: [${testCase.id}] ${method} ${path} (Rol: ${persona})`);
 
-    if (rawTestCase.path !== testCase.path) {
+    if (catalogResolvedRawTestCase.path !== testCase.path) {
+      console.log(
+        ` Resolved path from "${catalogResolvedRawTestCase.path}" to "${testCase.path}"`
+      );
+    } else if (rawTestCase.path !== catalogResolvedRawTestCase.path) {
       console.log(` Resolved path from "${rawTestCase.path}" to "${testCase.path}"`);
     }
 

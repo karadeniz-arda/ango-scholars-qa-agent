@@ -1,0 +1,258 @@
+generatedAt: 2026-07-14T08:54:49.057Z
+sourceRoot: /Users/ardakaradeniz/Desktop/staj/staj_ilk_task/ango-scholars-client
+routes:
+  - path: /company/all-compliance-requirements
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/all-jobs
+    file: src/modules/company/jobs/routes/JobAssessmentDetails.route.tsx
+    params: []
+    area: jobs
+    persona: company_admin
+  - path: /company/all-payments
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: company_admin
+  - path: /company/all-timesheets
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: company_admin
+  - path: /company/all-work-setups
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: work-setups
+    persona: company_admin
+  - path: /company/assessments
+    file: src/modules/company/assesments/routes/CompanyAssessmentCreation.route.tsx
+    params: []
+    area: assessments
+    persona: company_admin
+  - path: /company/assessments/:assessmentId/submissions/:submissionId/evaluate
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - assessmentId
+      - submissionId
+    area: assessments
+    persona: company_admin
+  - path: /company/assessments/:id
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - id
+    area: assessments
+    persona: company_admin
+  - path: /company/assessments/create
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: assessments
+    persona: company_admin
+  - path: /company/compliance-requirements
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/compliance-requirements/${selectedCompliance.id}
+    file: src/modules/company/compliance-requirements/routes/ComplianceRequirements.route.tsx
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/jobs
+    file: src/modules/company/jobs/routes/JobAssessmentDetails.route.tsx
+    params: []
+    area: jobs
+    persona: company_admin
+  - path: /company/jobs/:id
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - id
+    area: jobs
+    persona: company_admin
+  - path: /company/jobs/:id/assessment-submissions/:assessmentId
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - id
+      - assessmentId
+    area: jobs
+    persona: company_admin
+  - path: /company/jobs/?jobId=${jobId}
+    file: src/modules/public/routes/PublicJobDetailsRoute.tsx
+    params:
+      - jobId
+    area: jobs
+    persona: company_admin
+  - path: /company/jobs/create
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: jobs
+    persona: company_admin
+  - path: /company/member-profile
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/payments
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: company_admin
+  - path: /company/project-settings
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/skills
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: skills
+    persona: company_admin
+  - path: /company/talent-pool
+    file: src/modules/company/CompanyRoutes.tsx
+    params: []
+    area: talent
+    persona: company_admin
+  - path: /company/team
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: unknown
+    persona: company_admin
+  - path: /company/timesheet
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: company_admin
+  - path: /company/work-setups
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: work-setups
+    persona: company_admin
+  - path: /talent
+    file: src/modules/company/members/routes/AcceptInvitation.route.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/assessments/:assessmentId/prepare
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - assessmentId
+    area: assessments
+    persona: talent
+  - path: /talent/assessments/:assessmentId/session/:sessionId
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - assessmentId
+      - sessionId
+    area: assessments
+    persona: talent
+  - path: /talent/contracts/:contractId
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - contractId
+    area: contracts
+    persona: talent
+  - path: /talent/dashboard
+    file: src/modules/auth/routes/Login.route.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/dashboard?tab=contracts
+    file: src/modules/talent/contracts/routes/TalentContractDetails.route.tsx
+    params: []
+    area: contracts
+    persona: talent
+  - path: /talent/dashboard?tab=offers
+    file: src/modules/talent/offers/routes/TalentOfferDetails.route.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/id-verification
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/jobs
+    file: src/modules/talent/identity-verification/routes/IdVerification.route.tsx
+    params: []
+    area: jobs
+    persona: talent
+  - path: /talent/jobs?jobId=${jobIdNumber}
+    file: src/modules/talent/jobs/routes/TalentJobApply.route.tsx
+    params:
+      - jobIdNumber
+    area: jobs
+    persona: talent
+  - path: /talent/jobs/:jobId
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - jobId
+    area: jobs
+    persona: talent
+  - path: /talent/jobs/?jobId=${job.id}
+    file: src/modules/public/routes/PublicJobDetailsRoute.tsx
+    params: []
+    area: jobs
+    persona: talent
+  - path: /talent/jobs/?jobId=${jobId}
+    file: src/modules/public/routes/PublicJobDetailsRoute.tsx
+    params:
+      - jobId
+    area: jobs
+    persona: talent
+  - path: /talent/jobs/${selectedJob.id}
+    file: src/modules/talent/dashboard/routes/TalentDashboard.route.tsx
+    params: []
+    area: jobs
+    persona: talent
+  - path: /talent/jobs/${targetJob.id}
+    file: src/modules/talent/jobs/routes/TalentJobs.route.tsx
+    params: []
+    area: jobs
+    persona: talent
+  - path: /talent/offers/:offerId
+    file: src/routes/utils/document-title.utils.ts
+    params:
+      - offerId
+    area: talent
+    persona: talent
+  - path: /talent/onboarding
+    file: src/modules/talent/TalentRoutes.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/payments
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: talent
+  - path: /talent/profile
+    file: src/modules/talent/identity-verification/routes/IdentityVerificationRetry.route.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/timesheet
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: payments
+    persona: talent
+  - path: /talent/verification/failed
+    file: src/modules/talent/identity-verification/routes/IdVerification.route.tsx
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/verification/pending
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/verification/retry
+    file: src/routes/utils/document-title.utils.ts
+    params: []
+    area: talent
+    persona: talent
+  - path: /talent/verification/success
+    file: src/modules/talent/identity-verification/routes/IdVerification.route.tsx
+    params: []
+    area: talent
+    persona: talent
