@@ -1,19 +1,47 @@
 import fs from "node:fs";
 import yaml from "yaml";
-import { getBestDiscoveredBrowserRoute } from "../../discovery/route-candidate-discovery.js";
+import {
+  discoverBrowserRouteCandidates,
+  getBestDiscoveredBrowserRoute,
+} from "../../discovery/route-candidate-discovery.js";
 import { createCustomToken } from "../../auth/firebase.js";
+import type {
+  RuntimeResourceContext,
+} from "../../runtime/runtime-context.js";
 
 type BrowserPersona = "company_admin" | "talent";
-type DesiredJobStatus = "active" | "closed" | "draft";
+type DesiredJobStatus =
+  | "active"
+  | "closed"
+  | "draft";
 
-type BrowserExecutionContext = {
-  companyId?: string | undefined;
-  projectId?: string | undefined;
-  assessmentId?: string | undefined;
-  jobs?: any[] | undefined;
+type DesiredTalentContractFixture =
+  | "populated-work-setups"
+  | "empty-work-setups"
+  | "active-or-started"
+  | "any";
+
+type TalentContractFixtureState = {
+  desiredFixture:
+    DesiredTalentContractFixture;
+  matchedState: boolean;
+  contractCount: number;
+  workSetupCount: number;
+  populatedContractCount: number;
 };
 
+type BrowserExecutionContext =
+  RuntimeResourceContext & {
+    jobs?: any[] | undefined;
+  };
+
 const executionContextCache = new Map<string, Promise<BrowserExecutionContext>>();
+
+const talentContractRouteCache =
+  new Map<string, Promise<string | undefined>>();
+
+const talentContractFixtureStateCache =
+  new Map<string, TalentContractFixtureState>();
 
 function normalizeBaseUrl(url: string) {
   return String(url || "").replace(/\/$/, "");
@@ -29,7 +57,9 @@ function isConcreteBrowserRoute(route: string): boolean {
   if (
     normalized.includes("UNKNOWN") ||
     normalized.includes("{") ||
-    normalized.includes("}")
+    normalized.includes("}") ||
+    /:[A-Za-z0-9_]+/.test(normalized) ||
+    normalized.includes("$")
   ) {
     return false;
   }
@@ -73,6 +103,55 @@ function needsJobDetailsRoute(caseText: string) {
     caseText.includes("job visibility") ||
     caseText.includes("visibility badge") ||
     caseText.includes("status badge")
+  );
+}
+
+function needsJobCreationRoute(
+  caseText: string,
+  persona: BrowserPersona
+) {
+  if (persona !== "company_admin") {
+    return false;
+  }
+
+  const normalized = caseText
+    .toLowerCase()
+    .replace(/[-_]+/g, " ");
+
+  const directJobCreationIntent =
+    [
+      "job creation",
+      "create job",
+      "create a job",
+      "creating a job",
+      "edit job",
+      "editing a job",
+      "job creation wizard",
+      "job create wizard",
+      "job edit wizard",
+    ].some((term) =>
+      normalized.includes(term)
+    ) ||
+    (
+      normalized.includes("job") &&
+      normalized.includes("wizard")
+    );
+
+  const projectCreationInsideJobWizard =
+    normalized.includes("project selector") &&
+    [
+      "create project",
+      "create a project",
+      "creating a project",
+      "project creation",
+      "newly created project",
+    ].some((term) =>
+      normalized.includes(term)
+    );
+
+  return (
+    directJobCreationIntent ||
+    projectCreationInsideJobWizard
   );
 }
 
@@ -138,7 +217,13 @@ function extractItems(data: any): any[] {
     data.data,
     data.projects,
     data.assessments,
+    data.contracts,
+    data.workSetups,
+    data.work_setups,
     data.data?.assessments,
+    data.data?.contracts,
+    data.data?.workSetups,
+    data.data?.work_setups,
     data.jobs,
     data.rows,
     data.data?.items,
@@ -251,7 +336,11 @@ function pickJob(jobs: any[], desiredStatus?: DesiredJobStatus): any | undefined
 function pickFirstId(data: any): string | undefined {
   const item = extractItems(data)[0];
 
-  return getJobId(item) ?? (data?.id !== undefined ? String(data.id) : undefined);
+  return (
+    getJobId(item) ??
+    getJobId(data?.data) ??
+    getJobId(data)
+  );
 }
 
 async function getFirebaseIdToken(persona: BrowserPersona): Promise<string> {
@@ -492,17 +581,636 @@ const projectId = await resolveProjectId(
 };
 }
 
-async function getCachedBrowserExecutionContext(
-  persona: BrowserPersona
-): Promise<BrowserExecutionContext> {
-  const companyId = process.env.QA_COMPANY_ID || "unknown";
-  const cacheKey = `${persona}:${companyId}`;
+function getRuntimeEntityId(
+  value: any
+): string | undefined {
+  if (
+    typeof value === "string" ||
+    typeof value === "number"
+  ) {
+    const normalized = String(value).trim();
 
-  if (!executionContextCache.has(cacheKey)) {
-    executionContextCache.set(cacheKey, resolveBrowserExecutionContext(persona));
+    return normalized || undefined;
   }
 
-  return executionContextCache.get(cacheKey)!;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const id =
+    value.id ??
+    value.contractId ??
+    value.jobId ??
+    value._id;
+
+  if (
+    id === undefined ||
+    id === null ||
+    String(id).trim() === ""
+  ) {
+    return undefined;
+  }
+
+  return String(id);
+}
+
+function collectSemanticRuntimeIds(
+  value: any,
+  semantic: "contract" | "job",
+  depth = 0,
+  ids = new Set<string>()
+): Set<string> {
+  if (
+    value === null ||
+    value === undefined ||
+    depth > 7
+  ) {
+    return ids;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectSemanticRuntimeIds(
+        item,
+        semantic,
+        depth + 1,
+        ids
+      );
+    }
+
+    return ids;
+  }
+
+  if (typeof value !== "object") {
+    return ids;
+  }
+
+  const semanticIdKey = `${semantic}id`;
+
+  for (
+    const [key, child]
+    of Object.entries(value)
+  ) {
+    const normalizedKey = key
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+
+    const isSemanticId =
+      normalizedKey === semanticIdKey ||
+      normalizedKey.endsWith(
+        semanticIdKey
+      );
+
+    const isSemanticEntity =
+      normalizedKey === semantic;
+
+    if (
+      isSemanticId ||
+      isSemanticEntity
+    ) {
+      const id =
+        getRuntimeEntityId(child);
+
+      if (id) {
+        ids.add(id);
+      }
+    }
+
+    collectSemanticRuntimeIds(
+      child,
+      semantic,
+      depth + 1,
+      ids
+    );
+  }
+
+  return ids;
+}
+
+function getContractId(
+  contract: any
+): string | undefined {
+  return getRuntimeEntityId(contract);
+}
+
+function getContractJobId(
+  contract: any
+): string | undefined {
+  return (
+    getRuntimeEntityId(contract?.job) ??
+    getRuntimeEntityId(
+      contract?.jobId
+    ) ??
+    getRuntimeEntityId(
+      contract?.offer
+        ?.jobApplication
+        ?.job
+    )
+  );
+}
+
+function getContractStatus(
+  contract: any
+): string {
+  return String(
+    contract?.status ??
+      contract?.contractStatus ??
+      contract?.state ??
+      ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[-_\s]+/g, "");
+}
+
+function contractIsActiveOrStarted(
+  contract: any
+): boolean {
+  const status =
+    getContractStatus(contract);
+
+  return [
+    "active",
+    "started",
+    "inprogress",
+    "ongoing",
+  ].includes(status);
+}
+
+function detectDesiredTalentContractFixture(
+  testCase: any
+): DesiredTalentContractFixture {
+  const caseText =
+    getCaseText(testCase)
+      .replace(/\s+/g, " ");
+
+  const emptySignals = [
+    "no assigned work setups",
+    "no work setups are assigned",
+    "zero work setups",
+    "without work setups",
+    "without any work setups",
+    "empty state",
+  ];
+
+  if (
+    emptySignals.some(
+      (signal) =>
+        caseText.includes(signal)
+    )
+  ) {
+    return "empty-work-setups";
+  }
+
+  const populatedSignals = [
+    "with assigned work setups",
+    "assigned work setups",
+    "existing work setup cards",
+    "work setup cards",
+    "compact work setup cards",
+    "document-required indication",
+    "complete the following work setups",
+  ];
+
+  if (
+    populatedSignals.some(
+      (signal) =>
+        caseText.includes(signal)
+    )
+  ) {
+    return "populated-work-setups";
+  }
+
+  if (
+    caseText.includes("active contract") ||
+    caseText.includes("started contract") ||
+    caseText.includes(
+      "active or started contract"
+    )
+  ) {
+    return "active-or-started";
+  }
+
+  return "any";
+}
+
+function selectTalentContractFixture(
+  contractsData: any,
+  workSetupsData: any,
+  desiredFixture:
+    DesiredTalentContractFixture
+): {
+  selected?: any;
+  matchedState: boolean;
+  contractCount: number;
+  workSetupCount: number;
+  populatedContractCount: number;
+} {
+  const contracts =
+    extractItems(contractsData)
+      .filter(
+        (contract) =>
+          Boolean(getContractId(contract))
+      );
+
+  const workSetups =
+    extractItems(workSetupsData);
+
+  const workSetupContractIds =
+    collectSemanticRuntimeIds(
+      workSetups,
+      "contract"
+    );
+
+  const workSetupJobIds =
+    collectSemanticRuntimeIds(
+      workSetups,
+      "job"
+    );
+
+  const populatedContracts =
+    contracts.filter((contract) => {
+      const contractId =
+        getContractId(contract);
+
+      const jobId =
+        getContractJobId(contract);
+
+      return (
+        Boolean(
+          contractId &&
+            workSetupContractIds.has(
+              contractId
+            )
+        ) ||
+        Boolean(
+          jobId &&
+            workSetupJobIds.has(jobId)
+        )
+      );
+    });
+
+  const populatedIds =
+    new Set(
+      populatedContracts
+        .map(getContractId)
+        .filter(
+          (id): id is string =>
+            Boolean(id)
+        )
+    );
+
+  const emptyContracts =
+    contracts.filter((contract) => {
+      const contractId =
+        getContractId(contract);
+
+      return (
+        Boolean(contractId) &&
+        !populatedIds.has(contractId!)
+      );
+    });
+
+  const activeContracts =
+    contracts.filter(
+      contractIsActiveOrStarted
+    );
+
+  let matchingContracts: any[];
+
+  if (
+    desiredFixture ===
+    "populated-work-setups"
+  ) {
+    matchingContracts =
+      populatedContracts;
+  } else if (
+    desiredFixture ===
+    "empty-work-setups"
+  ) {
+    matchingContracts =
+      emptyContracts;
+  } else if (
+    desiredFixture ===
+    "active-or-started"
+  ) {
+    matchingContracts =
+      activeContracts;
+  } else {
+    matchingContracts =
+      contracts;
+  }
+
+  const selected =
+    matchingContracts.find(
+      contractIsActiveOrStarted
+    ) ??
+    matchingContracts[0] ??
+    activeContracts[0] ??
+    contracts[0];
+
+  const matchedState =
+    desiredFixture === "any"
+      ? Boolean(selected)
+      : matchingContracts.length > 0;
+
+  return {
+    selected,
+    matchedState,
+    contractCount:
+      contracts.length,
+    workSetupCount:
+      workSetups.length,
+    populatedContractCount:
+      populatedContracts.length,
+  };
+}
+
+function applyTalentContractFixtureState(
+  testCase: any,
+  state:
+    TalentContractFixtureState |
+    undefined
+): void {
+  delete testCase
+    .runtimeFixtureResolutionFailure;
+
+  if (
+    !state ||
+    state.desiredFixture === "any" ||
+    state.matchedState
+  ) {
+    return;
+  }
+
+  testCase.runtimeFixtureResolutionFailure =
+    `Browser fixture gate blocked ` +
+    `${testCase?.id || "case"}: ` +
+    `runtime fixture resolver found no ` +
+    `contract matching requested state ` +
+    `"${state.desiredFixture}" ` +
+    `(contracts=${state.contractCount}, ` +
+    `workSetups=${state.workSetupCount}, ` +
+    `populatedContracts=` +
+    `${state.populatedContractCount}).`;
+}
+
+async function resolveTalentContractDetailRoute(
+  testCase: any,
+  persona: BrowserPersona
+): Promise<string | undefined> {
+  if (persona !== "talent") {
+    return undefined;
+  }
+
+  const desiredFixture =
+    detectDesiredTalentContractFixture(
+      testCase
+    );
+
+  const cacheKey =
+    `${persona}:${desiredFixture}`;
+
+  const cached =
+    talentContractRouteCache.get(
+      cacheKey
+    );
+
+  if (cached) {
+    const cachedRoute =
+      await cached;
+
+    applyTalentContractFixtureState(
+      testCase,
+      talentContractFixtureStateCache.get(
+        cacheKey
+      )
+    );
+
+    return cachedRoute;
+  }
+
+  const resolution = (async () => {
+    const config = yaml.parse(
+      fs.readFileSync(
+        "config/environments.yaml",
+        "utf8"
+      )
+    );
+
+    const apiUrl = String(
+      process.env.QA_API_URL ??
+        config?.environments
+          ?.staging?.api_url ??
+        ""
+    );
+
+    if (!apiUrl) {
+      console.log(
+        " Browser fixture resolver could not resolve API URL for talent contracts."
+      );
+
+      return undefined;
+    }
+
+    const idToken =
+      await getFirebaseIdToken(
+        persona
+      );
+
+    const talentData =
+      await apiGet(
+        apiUrl,
+        "/talents/me",
+        idToken
+      );
+
+    const talentId =
+      pickFirstId(talentData);
+
+    if (!talentId) {
+      console.log(
+        " Browser fixture resolver could not resolve own talentId."
+      );
+
+      return undefined;
+    }
+
+    const contractsData =
+      await apiGet(
+        apiUrl,
+        `/talents/${
+          encodeURIComponent(talentId)
+        }/contracts`,
+        idToken
+      );
+
+    const workSetupsData =
+      await apiGet(
+        apiUrl,
+        `/talents/${
+          encodeURIComponent(talentId)
+        }/work-setups`,
+        idToken
+      );
+
+    const selection =
+      selectTalentContractFixture(
+        contractsData,
+        workSetupsData,
+        desiredFixture
+      );
+
+    const fixtureState:
+      TalentContractFixtureState = {
+        desiredFixture,
+        matchedState:
+          selection.matchedState,
+        contractCount:
+          selection.contractCount,
+        workSetupCount:
+          selection.workSetupCount,
+        populatedContractCount:
+          selection
+            .populatedContractCount,
+      };
+
+    talentContractFixtureStateCache.set(
+      cacheKey,
+      fixtureState
+    );
+
+    applyTalentContractFixtureState(
+      testCase,
+      fixtureState
+    );
+
+    const contractId =
+      getContractId(
+        selection.selected
+      );
+
+    if (!contractId) {
+      console.log(
+        ` Browser fixture resolver found ` +
+          `no accessible contract for ` +
+          `talentId=${talentId}.`
+      );
+
+      return undefined;
+    }
+
+    console.log(
+      ` Browser fixture resolver selected ` +
+        `contractId=${contractId}; ` +
+        `talentId=${talentId}; ` +
+        `desired=${desiredFixture}; ` +
+        `matchedState=${
+          selection.matchedState
+        }; contracts=${
+          selection.contractCount
+        }; workSetups=${
+          selection.workSetupCount
+        }; populatedContracts=${
+          selection
+            .populatedContractCount
+        }.`
+    );
+
+    if (
+      !selection.matchedState &&
+      desiredFixture !== "any"
+    ) {
+      console.log(
+        ` Browser fixture resolver could not ` +
+          `find the exact requested contract ` +
+          `state "${desiredFixture}". ` +
+          `The active accessible contract route ` +
+          `is retained for route verification, ` +
+          `but case execution will be blocked ` +
+          `deterministically as TEST_DATA_ISSUE.`
+      );
+    }
+
+    return (
+      `/talent/contracts/` +
+      encodeURIComponent(
+        contractId
+      )
+    );
+  })().catch(
+    (error: unknown) => {
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.log(
+        ` Browser fixture resolver contract ` +
+          `discovery failed: ${message}`
+      );
+
+      return undefined;
+    }
+  );
+
+  talentContractRouteCache.set(
+    cacheKey,
+    resolution
+  );
+
+  return resolution;
+}
+
+async function getCachedBrowserExecutionContext(
+  persona: BrowserPersona,
+  providedContext:
+    RuntimeResourceContext = {}
+): Promise<BrowserExecutionContext> {
+  const companyId =
+    providedContext.companyId ||
+    process.env.QA_COMPANY_ID ||
+    "unknown";
+
+  const cacheKey =
+    `${persona}:${companyId}`;
+
+  if (
+    !executionContextCache.has(
+      cacheKey
+    )
+  ) {
+    executionContextCache.set(
+      cacheKey,
+      resolveBrowserExecutionContext(
+        persona
+      )
+    );
+  }
+
+  const resolvedContext =
+    await executionContextCache.get(
+      cacheKey
+    )!;
+
+  const mergedContext = {
+    ...resolvedContext,
+    ...providedContext,
+  };
+
+  if (
+    Object.keys(
+      providedContext
+    ).length > 0
+  ) {
+    console.log(
+      ` Browser route resolver using API ` +
+        `runtime handoff for ${persona}:`,
+      providedContext
+    );
+  }
+
+  return mergedContext;
 }
 
 async function resolveJobDetailsRoute(
@@ -517,14 +1225,65 @@ async function resolveJobDetailsRoute(
     return "UNKNOWN";
   }
 
-  const context = await getCachedBrowserExecutionContext(persona);
-  const desiredStatus = detectDesiredJobStatus(testCase);
-  const job = pickJob(context.jobs ?? [], desiredStatus);
-  const jobId = getJobId(job);
+  const context =
+    await getCachedBrowserExecutionContext(
+      persona,
+      testCase
+        ?.runtimeResourceContext
+    );
+
+  const normalizedJobCaseText =
+    getCaseText(testCase)
+      .toLowerCase()
+      .replace(/[-_]+/g, " ");
+
+  const wantsNonDraftJob =
+    normalizedJobCaseText.includes(
+      "non draft job"
+    ) ||
+    normalizedJobCaseText.includes(
+      "not in draft"
+    ) ||
+    normalizedJobCaseText.includes(
+      "not draft"
+    ) ||
+    normalizedJobCaseText.includes(
+      "limited to draft jobs"
+    );
+
+  const desiredStatus = wantsNonDraftJob
+    ? undefined
+    : detectDesiredJobStatus(testCase);
+
+  const jobs = context.jobs ?? [];
+
+  const job = wantsNonDraftJob
+    ? jobs.find(
+        (candidate) =>
+          Boolean(getJobId(candidate)) &&
+          !jobMatchesDesiredStatus(
+            candidate,
+            "draft"
+          )
+      )
+    : pickJob(jobs, desiredStatus);
+
+  const jobId =
+    getJobId(job) ??
+    context.jobId;
 
   if (context.projectId && jobId) {
-    const status = getJobStatus(job) || "unknown";
-    const visibility = getJobVisibility(job) || "unknown";
+    const status =
+      getJobStatus(job) ||
+      (
+        context.jobId === jobId
+          ? "api-handoff"
+          : "unknown"
+      );
+
+    const visibility =
+      getJobVisibility(job) ||
+      "unknown";
 
     console.log(
       ` Browser route resolver selected jobId=${jobId} status=${status} visibility=${visibility}`
@@ -533,12 +1292,27 @@ async function resolveJobDetailsRoute(
     return `/company/all-jobs/${jobId}?project=${context.projectId}`;
   }
 
-  if (desiredStatus) {
+  if (wantsNonDraftJob) {
+    const availableStatuses = [
+      ...new Set(
+        jobs
+          .map(getJobStatus)
+          .filter(Boolean)
+      ),
+    ].join(", ");
+
+    console.log(
+      ` Browser route resolver could not resolve a non-draft job details route. ` +
+        `Available statuses: ${availableStatuses || "unknown"}`
+    );
+  } else if (desiredStatus) {
     console.log(
       ` Browser route resolver could not resolve a ${desiredStatus} job details route.`
     );
   } else {
-    console.log(" Browser route resolver could not resolve projectId/jobId for job details.");
+    console.log(
+      " Browser route resolver could not resolve projectId/jobId for job details."
+    );
   }
 
   return "UNKNOWN";
@@ -548,20 +1322,127 @@ export async function resolveBrowserRoute(
   plan: any,
   testCase: any
 ): Promise<string> {
-  const currentRoute = String(testCase.startRoute || "").trim();
+  const currentRoute =
+    String(testCase.startRoute || "").trim();
+
+  const persona =
+    String(testCase.persona || "") as BrowserPersona;
+
+  const planText = getPlanText(plan);
+  const caseText = getCaseText(testCase);
+
+  const normalizedCaseText = caseText
+    .toLowerCase()
+    .replace(/[-_]+/g, " ");
+
+  if (
+    needsJobCreationRoute(
+      caseText,
+      persona
+    )
+  ) {
+    const mutationStep =
+      Array.isArray(testCase?.steps)
+        ? testCase.steps.find(
+            (step: any) =>
+              step?.action ===
+              "createDraftJobAndVerifyRedirect"
+          )
+        : undefined;
+
+    const requestedOrigin =
+      mutationStep?.origin === "all-jobs"
+        ? "all-jobs"
+        : "jobs";
+
+    const creationRoute =
+      requestedOrigin === "all-jobs"
+        ? "/company/jobs/create?origin=all-jobs"
+        : "/company/jobs/create";
+
+    console.log(
+      ` Browser route resolver selected job creation route ` +
+        `for ${testCase.id}: ` +
+        `${currentRoute || "UNKNOWN"} -> ` +
+        `${creationRoute} ` +
+        `(origin=${requestedOrigin})`
+    );
+
+    return creationRoute;
+  }
+
+  /*
+   * READ_ONLY_JOB_WIZARD_ROUTE_V1
+   *
+   * Some cases inspect copy or controls inside the
+   * job wizard without creating a job. A concrete
+   * jobs-list entry route is not sufficient for
+   * those cases and may expose a same-named sidebar
+   * navigation item.
+   *
+   * Opening the wizard route is non-mutating. The
+   * runner still does not click Save, Create,
+   * Publish or any other persistence action.
+   */
+  const hasDedicatedJobMutationStep =
+    Array.isArray(testCase?.steps) &&
+    testCase.steps.some(
+      (step: any) =>
+        step?.action ===
+        "createDraftJobAndVerifyRedirect"
+    );
+
+  const requiresReadOnlyJobWizardRoute =
+    persona === "company_admin" &&
+    normalizedCaseText.includes(
+      "job wizard"
+    ) &&
+    !hasDedicatedJobMutationStep;
+
+  if (requiresReadOnlyJobWizardRoute) {
+    const readOnlyWizardRoute =
+      "/company/jobs/create";
+
+    console.log(
+      ` Browser route resolver selected ` +
+        `read-only job wizard route for ` +
+        `${testCase.id}: ` +
+        `${currentRoute || "UNKNOWN"} -> ` +
+        `${readOnlyWizardRoute}`
+    );
+
+    return readOnlyWizardRoute;
+  }
 
   if (isConcreteBrowserRoute(currentRoute)) {
     return currentRoute;
   }
 
-  const persona = String(testCase.persona || "") as BrowserPersona;
-  const planText = getPlanText(plan);
-  const caseText = getCaseText(testCase);
+  const isJobChangeRequestFlow = [
+    "job change request",
+    "change requests",
+    "publish request",
+    "field update request",
+    "request publish",
+    "publish comparison",
+  ].some((term) =>
+    normalizedCaseText.includes(term)
+  );
 
-if (caseText.includes("assessment")) {
+  /**
+   * The word "Assessments" may merely be one field inside
+   * a full job comparison. It must not redirect a job
+   * change-request case to an assessment details page.
+   */
+  if (
+    normalizedCaseText.includes("assessment") &&
+    !isJobChangeRequestFlow
+  ) {
   const context =
     await getCachedBrowserExecutionContext(
-      persona
+      persona,
+      testCase
+        ?.runtimeResourceContext
     );
 
   if (!context.assessmentId) {
@@ -586,8 +1467,24 @@ if (caseText.includes("assessment")) {
    * They need a concrete contract detail route and test data.
    */
   if (isDeepTalentContractRoute(caseText, persona)) {
+    const contractRoute =
+      await resolveTalentContractDetailRoute(
+        testCase,
+        persona
+      );
+
+    if (contractRoute) {
+      console.log(
+        ` Browser route resolver selected talent contract route ` +
+          `for ${testCase.id}: ${contractRoute}`
+      );
+
+      return contractRoute;
+    }
+
     console.log(
-      ` Browser route resolver: deep talent contract route for ${testCase.id} is not known yet.`
+      ` Browser route resolver could not resolve an accessible ` +
+        `talent contract route for ${testCase.id}.`
     );
 
     return "UNKNOWN";
@@ -596,8 +1493,62 @@ if (caseText.includes("assessment")) {
   /**
    * 2. Job details / hired / applicants / review-modal flows need a real job id.
    */
-  if (needsJobDetailsRoute(caseText)) {
-    return resolveJobDetailsRoute(testCase, persona);
+  /**
+   * Change-request comparison/review cases need:
+   * - a suitable request fixture;
+   * - a specific table row;
+   * - nested modal/panel navigation.
+   *
+   * A generic assessment, jobs or work-setups route
+   * must not be guessed for these flows.
+   */
+  const requiresNestedChangeRequestState = [
+    "comparison modal",
+    "comparison view",
+    "job details comparison",
+    "publish comparison",
+    "opening a publish request",
+    "open a publish request",
+    "publish request row",
+    "review controls",
+    "apply and reject",
+    "apply or reject",
+    "approve and reject",
+    "approve or reject",
+    "current and proposed",
+    "current versus proposed",
+  ].some((term) =>
+    normalizedCaseText.includes(term)
+  );
+
+  if (requiresNestedChangeRequestState) {
+    console.log(
+      ` Browser route resolver left ${testCase.id} unresolved: ` +
+        `nested change-request state requires a concrete request fixture and row navigation.`
+    );
+
+    return "UNKNOWN";
+  }
+
+  /**
+   * Existing job state cases may be resolved with
+   * the runtime job fixture resolver.
+   */
+  const requiresSpecificJobRoute =
+    needsJobDetailsRoute(caseText) ||
+    normalizedCaseText.includes("draft job") ||
+    normalizedCaseText.includes("non draft job") ||
+    normalizedCaseText.includes("active job") ||
+    normalizedCaseText.includes("job details page") ||
+    normalizedCaseText.includes(
+      "job details action area"
+    );
+
+  if (requiresSpecificJobRoute) {
+    return resolveJobDetailsRoute(
+      testCase,
+      persona
+    );
   }
 
   /**
@@ -673,4 +1624,390 @@ if (caseText.includes("assessment")) {
   }
 
   return "UNKNOWN";
+}
+
+type RuntimeRouteArea =
+  | "assessments"
+  | "languages"
+  | "skills"
+  | "jobs"
+  | "work-setups"
+  | "payments"
+  | "contracts"
+  | "offers"
+  | "talent-pool"
+  | "onboarding"
+  | "talent-profile";
+
+function inferRuntimeCaseArea(
+  testCase: any
+): RuntimeRouteArea | undefined {
+  const text = getCaseText(testCase)
+    .replace(/[-_]+/g, " ");
+
+  const isChangeRequest =
+    text.includes("change request") ||
+    text.includes("publish request") ||
+    text.includes("field update request") ||
+    text.includes("request publish");
+
+  if (isChangeRequest) {
+    return "jobs";
+  }
+
+  const isJobWizardContext =
+    (
+      text.includes("job") &&
+      text.includes("wizard")
+    ) ||
+    text.includes("job creation") ||
+    text.includes("create job") ||
+    text.includes("create a job") ||
+    text.includes("edit job") ||
+    text.includes("editing a job");
+
+  if (isJobWizardContext) {
+    return "jobs";
+  }
+
+  const isJobDetailContainer =
+    text.includes("job details") ||
+    text.includes("job detail") ||
+    text.includes("hired area") ||
+    text.includes("hired section") ||
+    text.includes("hired table") ||
+    text.includes("applicants") ||
+    text.includes("review modal") ||
+    text.includes("job status") ||
+    text.includes("job visibility");
+
+  if (isJobDetailContainer) {
+    return "jobs";
+  }
+
+  if (
+    text.includes("payment") ||
+    text.includes("invoice") ||
+    text.includes("timesheet")
+  ) {
+    return "payments";
+  }
+
+  const isContractDetailContainer =
+    text.includes("talent contract") ||
+    text.includes("contract details") ||
+    text.includes("contract detail") ||
+    text.includes("contract page") ||
+    text.includes("contract section");
+
+  if (isContractDetailContainer) {
+    return "contracts";
+  }
+
+  if (
+    text.includes("work setup") ||
+    text.includes("worksetup")
+  ) {
+    return "work-setups";
+  }
+
+  const isLanguageFeature =
+    text.includes("language") ||
+    text.includes("proficiency") ||
+    text.includes("listening") ||
+    text.includes("speaking") ||
+    text.includes("writing") ||
+    text.includes("reading");
+
+  if (isLanguageFeature) {
+    return "languages";
+  }
+
+  if (
+    text.includes("skill selector") ||
+    text.includes("selected skill") ||
+    text.includes("skills page") ||
+    text.includes("skills taxonomy")
+  ) {
+    return "skills";
+  }
+
+  if (
+    text.includes("assessment") &&
+    !isChangeRequest
+  ) {
+    return "assessments";
+  }
+
+  const isContractFeature =
+    text.includes("talent contract") ||
+    text.includes("contract details") ||
+    text.includes("contract page") ||
+    text.includes("contract section");
+
+  if (isContractFeature) {
+    return "contracts";
+  }
+
+  if (text.includes("offer")) {
+    return "offers";
+  }
+
+  if (text.includes("talent pool")) {
+    return "talent-pool";
+  }
+
+  if (text.includes("onboarding")) {
+    return "onboarding";
+  }
+
+  if (text.includes("talent profile")) {
+    return "talent-profile";
+  }
+
+  if (
+    text.includes("job") ||
+    text.includes("applicant") ||
+    text.includes("hired") ||
+    isChangeRequest
+  ) {
+    return "jobs";
+  }
+
+  return undefined;
+}
+
+function inferRuntimeRouteArea(
+  route: string
+): RuntimeRouteArea | undefined {
+  const normalized =
+    String(route || "")
+      .split("?")[0]!
+      .toLowerCase();
+
+  if (normalized.includes("assessment")) {
+    return "assessments";
+  }
+
+  if (normalized.includes("work-setup")) {
+    return "work-setups";
+  }
+
+  if (
+    normalized.includes("payment") ||
+    normalized.includes("timesheet")
+  ) {
+    return "payments";
+  }
+
+  if (normalized.includes("skill")) {
+    return "skills";
+  }
+
+  if (normalized.includes("contract")) {
+    return "contracts";
+  }
+
+  if (normalized.includes("offer")) {
+    return "offers";
+  }
+
+  if (normalized.includes("talent-pool")) {
+    return "talent-pool";
+  }
+
+  if (normalized.includes("onboarding")) {
+    return "onboarding";
+  }
+
+  if (normalized.includes("profile")) {
+    return "talent-profile";
+  }
+
+  if (normalized.includes("job")) {
+    return "jobs";
+  }
+
+  return undefined;
+}
+
+function areRuntimeRouteAreasCompatible(
+  wantedArea: RuntimeRouteArea,
+  routeArea: RuntimeRouteArea
+): boolean {
+  if (wantedArea === routeArea) {
+    return true;
+  }
+
+  if (wantedArea === "languages") {
+    return new Set<RuntimeRouteArea>([
+      "talent-profile",
+      "onboarding",
+      "assessments",
+    ]).has(routeArea);
+  }
+
+  return false;
+}
+
+/**
+ * Returns up to three ranked routes for live browser probing.
+ *
+ * Ranking uses the current route, special runtime fixture
+ * resolution and all codebase/catalog discovery candidates.
+ * Feature-area agreement is more important than the original
+ * confidence label.
+ */
+export async function resolveBrowserRouteCandidates(
+  plan: any,
+  testCase: any,
+  limit = 3
+): Promise<string[]> {
+  const wantedArea =
+    inferRuntimeCaseArea(testCase);
+
+  const ranked = new Map<
+    string,
+    {
+      route: string;
+      score: number;
+      reason: string;
+    }
+  >();
+
+  const addCandidate = (
+    routeValue: unknown,
+    baseScore: number,
+    reason: string
+  ) => {
+    const route =
+      String(routeValue || "").trim();
+
+    if (!isConcreteBrowserRoute(route)) {
+      return;
+    }
+
+    const routeArea =
+      inferRuntimeRouteArea(route);
+
+    let score = baseScore;
+
+    if (
+      wantedArea &&
+      routeArea &&
+      areRuntimeRouteAreasCompatible(
+        wantedArea,
+        routeArea
+      )
+    ) {
+      score += 100;
+    } else if (
+      wantedArea &&
+      routeArea
+    ) {
+      score -= 100;
+    }
+
+    const existing = ranked.get(route);
+
+    if (
+      !existing ||
+      score > existing.score
+    ) {
+      ranked.set(route, {
+        route,
+        score,
+        reason,
+      });
+    }
+  };
+
+  addCandidate(
+    testCase?.startRoute,
+    25,
+    "planner-current-route"
+  );
+
+  /*
+   * Run existing dynamic fixture resolution using a cloned
+   * UNKNOWN route so a planner-selected route cannot short
+   * circuit runtime job/assessment resolution.
+   */
+  const runtimeResolutionCase = {
+    ...testCase,
+    startRoute: "UNKNOWN",
+  };
+
+  const runtimeResolvedRoute =
+    await resolveBrowserRoute(
+      plan,
+      runtimeResolutionCase
+    );
+
+  const runtimeFixtureResolutionFailure =
+    String(
+      runtimeResolutionCase
+        .runtimeFixtureResolutionFailure ??
+        ""
+    ).trim();
+
+  if (runtimeFixtureResolutionFailure) {
+    testCase.runtimeFixtureResolutionFailure =
+      runtimeFixtureResolutionFailure;
+  } else {
+    delete testCase
+      .runtimeFixtureResolutionFailure;
+  }
+
+  addCandidate(
+    runtimeResolvedRoute,
+    70,
+    "runtime-fixture-resolver"
+  );
+
+  for (
+    const candidate of
+    discoverBrowserRouteCandidates(
+      plan,
+      testCase
+    )
+  ) {
+    const confidenceScore =
+      candidate.confidence === "high"
+        ? 60
+        : candidate.confidence === "medium"
+          ? 40
+          : 10;
+
+    addCandidate(
+      candidate.route,
+      confidenceScore,
+      `${candidate.source}: ${candidate.reason}`
+    );
+  }
+
+  const selected = [...ranked.values()]
+    .sort(
+      (left, right) =>
+        right.score - left.score
+    )
+    .slice(0, Math.max(1, limit));
+
+  console.log(
+    ` Runtime route candidates for ` +
+      `${testCase?.id ?? "case"}: ` +
+      (
+        selected
+          .map(
+            (candidate) =>
+              `${candidate.route}(${candidate.score})`
+          )
+          .join(", ") ||
+        "none"
+      )
+  );
+
+  return selected.map(
+    (candidate) => candidate.route
+  );
 }

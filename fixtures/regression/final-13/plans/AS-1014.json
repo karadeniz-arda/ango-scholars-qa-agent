@@ -1,0 +1,152 @@
+{
+  "issueKey": "AS-1014",
+  "summary": "UI - [Company :: Payments] Invoice Details Drawer",
+  "notes": "Coverage is limited to the Company Payments and All Payments invoice tables and the sent for processing and processed tabs required by the Jira ticket. Browser routes are not supplied, so startRoute is UNKNOWN and execution requires route resolution. The invoice number INV-1-202601-0001 is a GitHub E2E fixture and is used only as a compatible-state resolver hint; the runner must verify that the selected runtime invoice is in the required table and tab state and must not substitute an arbitrary record. If no compatible runtime record exists, the case is BLOCKED or MANUAL_REQUIRED. The timesheet redirection control label and destination route are not supplied, so its presence and navigation require manual verification. No unauthenticated browser cases are included because the browser runner does not support unauthenticated execution. Planner runtime fixture policy: web-1: compatible-state invoice flow normalized for \"sent for processing\" using candidate INV-1-202601-0001; quick timesheet redirection remains manual-only. web-2: compatible-state invoice flow normalized for \"processed\" using candidate INV-1-202601-0001; quick timesheet redirection remains manual-only. web-3: compatible-state invoice flow normalized for \"sent for processing\" using candidate INV-1-202601-0001; quick timesheet redirection remains manual-only. web-4: compatible-state invoice flow normalized for \"processed\" using candidate INV-1-202601-0001; quick timesheet redirection remains manual-only. Planner case budget applied: retained 1 API and 2 browser cases; 2 duplicate, repeated-dependency, or lower-priority overflow case(s) were omitted.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/invoices/{invoiceId}",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "The company invoice detail response must provide the data required by the drawer: invoiceNumber, paymentProvider, lineItems, approvedBy, approvedAt, and timesheets. Each returned timesheet must include its ID and the approval information represented by reviewedBy and reviewedAt, along with the related contract, job, talent, and company data needed for the drawer and timesheet-entry redirection."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that a compatible company invoice in the sent for processing state opens the invoice details drawer.",
+      "startRoute": "/company/all-payments",
+      "successCriteria": "A compatible runtime invoice in the sent for processing state opens the invoice details drawer. The drawer displays Invoice No, Payment Provider, Line Items, Invoice Approved By, Invoice Approved At, Timesheets, ID, Timesheet Approved By, Timesheet Approved At. The drawer does not display undefined. The drawer does not display null.",
+      "runtimeFixturePolicy": "compatible-state",
+      "steps": [
+        {
+          "action": "clickTopTab",
+          "text": "sent for processing"
+        },
+        {
+          "action": "clickText",
+          "text": "INV-1-202601-0001"
+        },
+        {
+          "action": "wait",
+          "ms": 1000
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice No"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Payment Provider"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Line Items"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved At"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheets"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "ID"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved At"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that a compatible company invoice in the processed state opens the invoice details drawer.",
+      "startRoute": "/company/all-payments",
+      "successCriteria": "A compatible runtime invoice in the processed state opens the invoice details drawer. The drawer displays Invoice No, Payment Provider, Line Items, Invoice Approved By, Invoice Approved At, Timesheets, ID, Timesheet Approved By, Timesheet Approved At. The drawer does not display undefined. The drawer does not display null.",
+      "runtimeFixturePolicy": "compatible-state",
+      "steps": [
+        {
+          "action": "clickTopTab",
+          "text": "processed"
+        },
+        {
+          "action": "clickText",
+          "text": "INV-1-202601-0001"
+        },
+        {
+          "action": "wait",
+          "ms": 1000
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice No"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Payment Provider"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Line Items"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved At"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheets"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "ID"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved At"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    }
+  ]
+}

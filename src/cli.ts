@@ -67,7 +67,13 @@ const issueId = getArg("--issue") || getArg("--fixture");
   process.exit(1);
 }
       const apiResults = await runApiCases();
-      const browserResults = await runBrowserCases();
+
+      const browserResults =
+        await runBrowserCases({
+          runtimeContexts:
+            apiResults.runtimeContexts,
+        });
+
       const plan = readCurrentPlan();
 
       writeReport({
@@ -81,6 +87,7 @@ const issueId = getArg("--issue") || getArg("--fixture");
       console.log("invalid command");
     }
   } catch (error) {
-    console.error("Error:", error);
-  }
+  console.error("Error:", error);
+  process.exitCode = 1;
+}
 })();

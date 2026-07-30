@@ -1,0 +1,88 @@
+{
+  "issueKey": "AS-1154",
+  "summary": "UI - Display Warning When Sending Invitation to People Outside of the Job Country List",
+  "notes": "This is a client-side UI change; no server-side AS-1154 changes or API contracts were supplied, so no API cases are included. Browser routes and concrete job, talent, country, and email fixtures were not provided; cases using UNKNOWN routes require an exact runtime fixture and may become BLOCKED or MANUAL_REQUIRED. Unauthenticated browser coverage is not included because the browser runner does not support that persona. Invitation submission itself is not performed because generic state-changing browser actions are prohibited; coverage verifies the pre-send warnings.",
+  "apiCases": [],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that the external invitation modal displays a general warning explaining that people outside the job's allowed countries cannot see the job listing details or apply.",
+      "startRoute": "/company/all-jobs",
+      "successCriteria": "After opening the external invitation modal for a job with a configured country list, a warning is displayed with the job country list substituted for {countries}. The warning states that people outside of the allowed countries will not be able to see the job listing details or apply. Raw placeholders such as {countries}, undefined, or null must not be displayed. An exact job fixture with a non-empty country list is required; otherwise mark MANUAL_REQUIRED.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickButton",
+          "text": "Invite external people"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Note: people outside of"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "will not be able to see the job listing details or apply."
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "{countries}"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that inviting a talent from the talent pool to a job displays a country mismatch warning identifying the talent and explaining that the talent's country is outside the job's allowed countries.",
+      "startRoute": "/company/all-jobs",
+      "successCriteria": "For an exact talent-pool invitation fixture containing a selected talent whose country is outside the selected job's allowed countries, the invitation flow displays the heading Country mismatch warning and a warning item containing the runtime talent name, the talent country, the job's allowed countries, and the explanation that the talent will not be able to see the job listing details or apply. Raw ICU placeholders, undefined, or null must not be displayed. The exact job and talent fixtures and the selection prerequisite are not supplied, so this case is MANUAL_REQUIRED until they are configured.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickButton",
+          "text": "Invite"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Country mismatch warning"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "This country is outside this job's allowed countries"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "not be able to see the job listing details or apply."
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "{talentCountry}"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "{talentNames}"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "{jobCountries}"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    }
+  ]
+}

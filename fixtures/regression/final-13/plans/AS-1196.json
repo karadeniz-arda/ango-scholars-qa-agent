@@ -1,0 +1,113 @@
+{
+  "issueKey": "AS-1196",
+  "summary": "Work Setups Scope and Project Filtering Are Incorrect in Job Wizard",
+  "notes": "The supplied GitHub context does not expose the canonical Work Setup API route, attachment endpoint, browser route, company ID, project IDs, Work Setup IDs, or a second project name. API cases using UNKNOWN paths must be resolved with the endpoint catalog and runtime fixtures before execution. Browser cases require an exact runtime fixture for the project-specific Work Setup associated with Andromeda and a second distinct project; otherwise they are BLOCKED or MANUAL_REQUIRED. No destructive cleanup of existing job Work Setups is included. Unauthenticated browser coverage is not generated because the browser runner does not support unauthenticated execution; unauthenticated API coverage should be added once the endpoint contract is available.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/work-setups",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Resolve the Work Setup list endpoint and request it with the selected project's projectId and includeGlobal=true. The response must include company-wide Work Setups with no project and Work Setups assigned to the selected project, including the populated project association needed for scope display. It must exclude Work Setups assigned to unrelated projects and deleted records. Execution is BLOCKED until the canonical route and runtime project fixtures are supplied."
+      }
+    },
+    {
+      "id": "api-2",
+      "persona": "company_admin",
+      "method": "POST",
+      "path": "UNKNOWN",
+      "body": {},
+      "expect": {
+        "status": "4xx",
+        "notes": "Resolve the backend job Work Setup attachment endpoint and request body. Attempt to attach a project-specific Work Setup to a job belonging to a different project; the backend must reject the request and leave the job unchanged. The required job, Work Setup, and project IDs and the endpoint contract are not supplied, so this case is MANUAL_REQUIRED or BLOCKED."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that the Work Setups list or table displays the project-specific Work Setup associated with Andromeda using project scope rather than Global, while company-wide Work Setups continue to display as Global.",
+      "startRoute": "/company/all-work-setups",
+      "successCriteria": "Using the exact project-specific Work Setup created for Andromeda, its row must show Project and the Andromeda project name or the existing project name/code display pattern, and that same row must not be labeled Global. Company-wide Work Setups must remain labeled Global. The route and exact fixture are unavailable in the supplied context, so the case becomes BLOCKED or MANUAL_REQUIRED if they cannot be resolved.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Andromeda"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Project"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Global"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that the job create or edit wizard Work Setups step for the Andromeda project shows global Work Setups and Work Setups assigned to Andromeda, but not Work Setups from unrelated projects.",
+      "startRoute": "/company/all-work-setups",
+      "successCriteria": "Open the wizard with Andromeda as the selected project and use the exact project-specific Work Setup associated with Andromeda. The Work Setups step must show company-wide Work Setups and the Andromeda Work Setup, must not show any Work Setup assigned to another project, and must not permit selecting an unrelated project-specific Work Setup. The client must continue to exclude unrelated records even if an incorrect API response contains them. The wizard route and exact fixtures are not supplied, so unresolved prerequisites require BLOCKED or MANUAL_REQUIRED.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickText",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Global"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Andromeda"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-3",
+      "persona": "company_admin",
+      "goal": "Verify that the job wizard does not show the Andromeda project-specific Work Setup when a different project is selected.",
+      "startRoute": "/company/all-work-setups",
+      "successCriteria": "Open the wizard with the second distinct runtime project selected and navigate to Work Setups. The exact Work Setup associated with Andromeda must not be visible or selectable, while global Work Setups remain available. The identity of the second project and the wizard route are not supplied, so a runtime fixture resolver must provide them or the case is BLOCKED or MANUAL_REQUIRED.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickText",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Global"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Andromeda"
+        }
+      ]
+    }
+  ]
+}

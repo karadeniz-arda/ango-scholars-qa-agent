@@ -176,6 +176,28 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
   const isCompanyPersona = testCase?.persona === "company_admin";
   const isTalentPersona = testCase?.persona === "talent";
 
+  const isJobChangeRequestContext =
+    lower.includes("job change request") ||
+    lower.includes("change requests table") ||
+    lower.includes("publish request") ||
+    lower.includes("field update request") ||
+    lower.includes("request publish");
+
+  if (
+    isCompanyPersona &&
+    isJobChangeRequestContext
+  ) {
+    candidates.push({
+      route: "/company/all-jobs",
+      confidence: "high",
+      source: "feature-area",
+      reason:
+        "Job change-request flows use the company All Jobs area as the safest known entry point.",
+    });
+
+    return candidates;
+  }
+
   const isWorkSetupContext =
     lower.includes("work setups") ||
     lower.includes("work setup") ||
@@ -186,7 +208,15 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
     lower.includes("require approval");
 
   const isJobWizardContext =
-    lower.includes("job wizard") ||
+    (
+      lower.includes("job") &&
+      lower.includes("wizard")
+    ) ||
+    lower.includes("job creation") ||
+    lower.includes("create job") ||
+    lower.includes("create a job") ||
+    lower.includes("edit job") ||
+    lower.includes("editing a job") ||
     lower.includes("job setup") ||
     lower.includes("attach work") ||
     lower.includes("selected setups");
@@ -366,7 +396,7 @@ export function discoverBrowserRouteCandidates(
   return uniqByRoute(candidates).sort(
     (a, b) => confidenceScore[b.confidence] - confidenceScore[a.confidence]
   );
-}2
+}
 
 export function getBestDiscoveredBrowserRoute(
   plan: any,

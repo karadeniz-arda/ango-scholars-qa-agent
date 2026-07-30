@@ -11,10 +11,29 @@ export type ApiTestCase = {
 
 export type BrowserStep =
   | { action: "wait"; ms: number }
+  | { action: "reload" }
   | { action: "setViewport"; width: number; height: number }
   | { action: "clickTopTab"; text: string }
+  | { action: "selectRuntimeTopTab" }
+  | {
+      action: "openRuntimeControl";
+      target: string;
+    }
+  | {
+      action: "selectRuntimeFilterOption";
+      queryKey: string;
+      hint?: string;
+    }
+  | {
+      action: "createDraftJobAndVerifyRedirect";
+      origin: "jobs" | "all-jobs";
+    }
   | { action: "clickButton"; text: string }
   | { action: "clickText"; text: string }
+  | { action: "openMenu"; text: string }
+  | { action: "selectOption"; text: string }
+  | { action: "assertUrlContains"; text: string }
+  | { action: "assertUrlNotContains"; text: string }
   | { action: "assertTextVisible"; text: string }
   | { action: "assertTextNotVisible"; text: string };
 
@@ -25,6 +44,23 @@ export type BrowserTestCase = {
   goal: string;
   startRoute: string;
   successCriteria: string;
+
+  /*
+   * INVOICE_FIXTURE_POLICY_ENFORCEMENT_V1
+   *
+   * exact:
+   *   The requested entity identity is part of
+   *   the test oracle. Do not substitute another
+   *   runtime record.
+   *
+   * compatible-state:
+   *   A safe record in the same required runtime
+   *   state may replace the candidate fixture.
+   */
+  runtimeFixturePolicy?:
+    | "exact"
+    | "compatible-state";
+
   steps?: BrowserStep[];
 };
 

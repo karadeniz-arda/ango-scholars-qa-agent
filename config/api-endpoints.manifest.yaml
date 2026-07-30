@@ -1,4 +1,4 @@
-generatedAt: 2026-07-14T11:58:45.200Z
+generatedAt: 2026-07-22T15:55:03.530Z
 sourceRoots:
   - /Users/ardakaradeniz/Desktop/staj/staj_ilk_task/ango-scholars-client
 endpoints:
@@ -512,6 +512,51 @@ endpoints:
     area: offers
     source: source-scan
   - method: GET
+    path: /companies/{companyId}/invoices
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}/approve
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/{invoiceId}/cancel
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+      - invoiceId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/export-csv
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /companies/{companyId}/invoices/on-demand
+    file: src/api/data/scholars-server.ts
+    params:
+      - companyId
+    area: payments
+    source: source-scan
+  - method: GET
     path: /companies/{companyId}/timesheets
     file: src/api/data/scholars-server.ts
     params:
@@ -562,6 +607,21 @@ endpoints:
     file: src/api/data/scholars-server.ts
     params:
       - companyId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/invoices
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+    area: payments
+    source: source-scan
+  - method: GET
+    path: /talents/{talentId}/invoices/{invoiceId}
+    file: src/api/data/scholars-server.ts
+    params:
+      - talentId
+      - invoiceId
     area: payments
     source: source-scan
   - method: GET
@@ -869,51 +929,6 @@ endpoints:
     area: unknown
     source: source-scan
   - method: GET
-    path: /companies/{companyId}/invoices
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /companies/{companyId}/invoices/{invoiceId}
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-      - invoiceId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /companies/{companyId}/invoices/{invoiceId}/approve
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-      - invoiceId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /companies/{companyId}/invoices/{invoiceId}/cancel
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-      - invoiceId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /companies/{companyId}/invoices/export-csv
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /companies/{companyId}/invoices/on-demand
-    file: src/api/data/scholars-server.ts
-    params:
-      - companyId
-    area: unknown
-    source: source-scan
-  - method: GET
     path: /companies/{companyId}/proctoring-sessions
     file: src/api/data/scholars-server.ts
     params:
@@ -1089,21 +1104,6 @@ endpoints:
     file: src/api/data/scholars-server.ts
     params:
       - talentId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /talents/{talentId}/invoices
-    file: src/api/data/scholars-server.ts
-    params:
-      - talentId
-    area: unknown
-    source: source-scan
-  - method: GET
-    path: /talents/{talentId}/invoices/{invoiceId}
-    file: src/api/data/scholars-server.ts
-    params:
-      - talentId
-      - invoiceId
     area: unknown
     source: source-scan
   - method: GET

@@ -1,0 +1,78 @@
+{
+  "issueKey": "AS-1028",
+  "summary": "UI - [Talent :: Payments] Invoice Details Drawer",
+  "notes": "Scope is limited to the talent payments invoice details drawer. Company payments coverage from the same GitHub change is excluded because it is outside this Jira issue. The talent invoice detail endpoint template is available, but no executable talent ID, invoice ID, or browser route is supplied. The browser case is therefore blocked until a talent-owned approved invoice and the talent payments route are resolved. The quick timesheet redirection requires manual verification because the target route and safe browser interaction are not supplied. Unauthenticated browser coverage is not generated because the browser runner does not support unauthenticated execution. Planner runtime fixture policy: web-1: exact fixture policy used because compatible invoice resolution prerequisites were not complete.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "talent",
+      "method": "GET",
+      "path": "/talents/{talentId}/invoices/{invoiceId}",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Execute with a compatible runtime fixture representing an approved invoice owned by the authenticated talent. Verify the response contains the invoice ID and invoice number, payment provider, line items, invoice approval information including approvedBy and approvedAt, a timesheets collection, and each associated timesheet's ID, reviewedBy, reviewedAt, and related contract, job, talent, and company data needed for the drawer and timesheet redirection. Concrete talent and invoice IDs are not supplied, so fixture resolution is required."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "talent",
+      "goal": "Verify that clicking the invoice number for a compatible talent-owned approved invoice opens the invoice details drawer and exposes the requested invoice, approval, line-item, and timesheet information.",
+      "startRoute": "/talent/payments",
+      "successCriteria": "After the compatible approved invoice is opened from the talent payments table, the details drawer displays Invoice No, Payment Provider, Line Items, Invoice Approved By, Invoice Approved At, Timesheets, ID, Timesheet Approved By, and Timesheet Approved At. The timesheet section provides a quick redirection to the associated timesheet. The drawer must not display undefined, null, or raw error values. Execution is BLOCKED until the talent payments route, approved invoice fixture, and safe invoice-number interaction are supplied.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "wait",
+          "ms": 1000
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice No"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Payment Provider"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Line Items"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Invoice Approved At"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheets"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "ID"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved By"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet Approved At"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    }
+  ]
+}

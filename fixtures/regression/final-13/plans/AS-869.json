@@ -1,0 +1,22 @@
+{
+  "issueKey": "AS-869",
+  "summary": "Update Compliance Document to have clickable links?",
+  "notes": "The client change keeps PDF annotation rendering enabled, automatically opens PDF links, and locks annotations so the viewer remains read-only. No application route, document fixture, link label, destination URL, or server endpoint was supplied. Browser verification of actual link navigation is therefore MANUAL_REQUIRED until a Compliance Document route and a document containing a grounded native PDF link are available. Unauthenticated browser coverage is not included because the browser runner does not support unauthenticated execution.",
+  "apiCases": [],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that the Compliance Document is available in the read-only PDF viewer configured to preserve clickable native PDF link annotations.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "The required Compliance Document route and PDF fixture must be provided. The document should render in the PDF viewer without undefined or null data. MANUAL_REQUIRED: open a grounded native link in the rendered PDF and verify that it navigates to its intended destination while annotation editing or selection remains unavailable.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Compliance Document"
+        }
+      ]
+    }
+  ]
+}

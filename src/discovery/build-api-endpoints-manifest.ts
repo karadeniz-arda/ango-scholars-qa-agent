@@ -141,11 +141,23 @@ function inferArea(apiPath: string, filePath: string): string {
   if (text.includes("assessment")) return "assessments";
   if (text.includes("job")) return "jobs";
   if (text.includes("project")) return "projects";
-  if (text.includes("contract")) return "contracts";
-  if (text.includes("offer")) return "offers";
-  if (text.includes("payment") || text.includes("payout") || text.includes("timesheet")) {
+
+  /**
+   * Invoice endpoints belong to the payments domain. Evaluate this
+   * before contracts/offers because invoice routes may be nested
+   * beneath another resource while still representing payment data.
+   */
+  if (
+    text.includes("invoice") ||
+    text.includes("payment") ||
+    text.includes("payout") ||
+    text.includes("timesheet")
+  ) {
     return "payments";
   }
+
+  if (text.includes("contract")) return "contracts";
+  if (text.includes("offer")) return "offers";
 
   return "unknown";
 }

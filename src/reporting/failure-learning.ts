@@ -84,6 +84,23 @@ function isMutatingBlocked(result: QaResult): boolean {
   );
 }
 
+function isBrowserMutationBlocked(
+  result: QaResult
+): boolean {
+  const text = resultText(result);
+
+  return (
+    result.status === "BLOCKED" &&
+    (
+      result.reasonCategory ===
+        "MUTATION_SAFETY_GUARD" ||
+      text.includes(
+        "qa_allow_browser_mutations"
+      )
+    )
+  );
+}
+
 function hasAny(text: string, words: string[]): boolean {
   return words.some((word) => text.includes(word));
 }
@@ -124,6 +141,34 @@ export function buildFailureLearnings(
   recommendation:
     "Keep this as expected behavior. Only enable QA_ALLOW_API_MUTATIONS=true with isolated test data.",
 });
+  }
+
+  const browserMutationBlocked =
+    browserResults.filter(
+      isBrowserMutationBlocked
+    );
+
+  if (
+    browserMutationBlocked.length > 0
+  ) {
+    learnings.push({
+      title:
+        "Browser mutations are safely blocked",
+      severity: "low",
+      category: "safety_guard",
+      productRisk: "expected_blocked",
+      suggestedCodeAreas: [
+        "src/agents/browser/browser-job-creation-redirect.ts",
+      ],
+      evidence:
+        browserMutationBlocked
+          .slice(0, 5)
+          .map(resultLabel),
+      recommendation:
+        "Keep browser mutations disabled by default. " +
+        "Enable QA_ALLOW_BROWSER_MUTATIONS=true only " +
+        "for approved isolated test runs.",
+    });
   }
 
     const missingApiContext = apiResults.filter((result) => {

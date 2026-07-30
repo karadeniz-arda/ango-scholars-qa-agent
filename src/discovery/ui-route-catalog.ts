@@ -62,6 +62,36 @@ function collectText(plan: any, testCase: any): string {
 }
 
 function inferWantedArea(text: string): string | undefined {
+  const isJobWizardContext =
+    (
+      text.includes("job") &&
+      text.includes("wizard")
+    ) ||
+    text.includes("job creation") ||
+    text.includes("create job") ||
+    text.includes("create a job") ||
+    text.includes("edit job") ||
+    text.includes("editing a job");
+
+  if (isJobWizardContext) {
+    return "jobs";
+  }
+
+  const isJobDetailContainer =
+    text.includes("job details") ||
+    text.includes("job detail") ||
+    text.includes("hired area") ||
+    text.includes("hired section") ||
+    text.includes("hired table") ||
+    text.includes("applicants") ||
+    text.includes("review modal") ||
+    text.includes("job status") ||
+    text.includes("job visibility");
+
+  if (isJobDetailContainer) {
+    return "jobs";
+  }
+
   if (
     text.includes("work setups") ||
     text.includes("work setup") ||
@@ -72,12 +102,34 @@ function inferWantedArea(text: string): string | undefined {
   }
 
   if (
+    text.includes("language") ||
+    text.includes("proficiency") ||
+    text.includes("listening") ||
+    text.includes("speaking") ||
+    text.includes("writing") ||
+    text.includes("reading")
+  ) {
+    return "languages";
+  }
+
+  if (
     text.includes("skill") ||
     text.includes("skills") ||
     text.includes("taxonomy") ||
     text.includes("discipline")
   ) {
     return "skills";
+  }
+
+  /*
+   * Specific feature areas must be evaluated before
+   * generic relationship words such as "job".
+   */
+  if (
+    text.includes("talent pool") ||
+    text.includes("talent-pool")
+  ) {
+    return "talent-pool";
   }
 
   if (
@@ -97,17 +149,6 @@ function inferWantedArea(text: string): string | undefined {
     return "payments";
   }
 
-  if (
-    text.includes("language") ||
-    text.includes("proficiency") ||
-    text.includes("listening") ||
-    text.includes("speaking") ||
-    text.includes("writing") ||
-    text.includes("reading")
-  ) {
-    return "languages";
-  }
-
   if (text.includes("assessment")) {
     return "assessments";
   }
@@ -117,6 +158,26 @@ function inferWantedArea(text: string): string | undefined {
   }
 
   return undefined;
+}
+
+function isCatalogAreaCompatible(
+  wantedArea: string,
+  routePath: string,
+  area: string
+): boolean {
+  if (wantedArea === area) {
+    return true;
+  }
+
+  if (wantedArea === "languages") {
+    return (
+      area === "assessments" ||
+      routePath.includes("/talent/profile") ||
+      routePath.includes("/talent/onboarding")
+    );
+  }
+
+  return false;
 }
 
 function routeMatchesPersona(route: UiRouteEntry, persona: string): boolean {
@@ -163,7 +224,14 @@ function scoreRoute(route: UiRouteEntry, text: string, persona: string): number 
 
   score += 20;
 
-  if (wantedArea && area === wantedArea) {
+  if (
+    wantedArea &&
+    isCatalogAreaCompatible(
+      wantedArea,
+      routePath,
+      area
+    )
+  ) {
     score += 60;
   }
 
@@ -177,6 +245,34 @@ function scoreRoute(route: UiRouteEntry, text: string, persona: string): number 
 
   if (text.includes(routePath)) {
     score += 80;
+  }
+
+  /*
+   * When one feature may live on multiple surfaces,
+   * prefer the surface explicitly named by the case.
+   */
+  if (
+    wantedArea === "languages" &&
+    text.includes("profile") &&
+    routePath.includes("profile")
+  ) {
+    score += 30;
+  }
+
+  if (
+    wantedArea === "languages" &&
+    text.includes("onboarding") &&
+    routePath.includes("onboarding")
+  ) {
+    score += 30;
+  }
+
+  if (
+    wantedArea === "languages" &&
+    text.includes("assessment") &&
+    area === "assessments"
+  ) {
+    score += 30;
   }
 
   /**

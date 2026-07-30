@@ -1,0 +1,46 @@
+{
+  "issueKey": "AS-1133",
+  "summary": "Update Jobs List Sorting",
+  "notes": "The Jira acceptance criteria are empty, so scope is inferred from the summary and the CompanyJobsList change only. The intended mappings are default/Newest to createdAt DESC, Latest to updatedAt DESC, and Oldest to updatedAt ASC. The supplied context does not provide the jobs-list browser route, API endpoint, query parameter name, concrete job fixtures, or exact rendered sort-option labels. API and browser execution should therefore be marked BLOCKED or MANUAL_REQUIRED until those details are resolved. Unrelated contract and payment-label changes in the same pull request are excluded. Unauthenticated browser coverage is not included because the browser runner does not support unauthenticated execution.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/jobs",
+      "body": {},
+      "expect": {
+        "status": "UNKNOWN",
+        "notes": "Blocked pending the canonical jobs-list endpoint and query contract. Verify that the default/Newest request uses sortBy=createdAt with sortOrder=DESC, Latest uses sortBy=updatedAt with sortOrder=DESC, and Oldest uses sortBy=updatedAt with sortOrder=ASC."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that the company jobs list exposes the Newest, Latest, and Oldest sorting choices and that each choice maps to the intended sorting behavior.",
+      "startRoute": "/company/all-jobs",
+      "successCriteria": "The runner resolves the company jobs list route and opens the safe sorting control. Newest, Latest, and Oldest are available as distinct options. After each option is selected, the visible selected value is correct. Backend request parameters and actual job ordering require manual or network-level verification because no supported oracle or endpoint contract was supplied.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "openMenu",
+          "text": "Sort"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Newest"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Latest"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Oldest"
+        }
+      ]
+    }
+  ]
+}

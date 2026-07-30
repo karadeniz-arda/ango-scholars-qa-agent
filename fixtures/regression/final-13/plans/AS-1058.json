@@ -1,0 +1,129 @@
+{
+  "issueKey": "AS-1058",
+  "summary": "UI - Update Language Proficiency Model to Use Listening, Speaking, Writing, and Reading",
+  "notes": "The supplied GitHub context confirms the new language mode enum values, CEFR levels, assessment language relationship, and client language-requirement UI labels. No language profile/create/update endpoint catalog, database migration, DTO validation contract, filter endpoint, or browser route was supplied. Unknown-route and unknown-endpoint cases must be resolved with the environment contract and will otherwise be BLOCKED or MANUAL_REQUIRED. Migration/data-loss verification requires a database snapshot containing legacy Receptive and Productive data and is not executable from the supplied context. Unauthenticated browser coverage is omitted because the browser runner does not support unauthenticated execution. Unrelated availability, compliance, and drag-handle changes are out of scope.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/assessments/{id}",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "requiredLanguageModes": [
+          "listening",
+          "speaking",
+          "writing",
+          "reading"
+        ],
+        "allowedLevels": [
+          "A1",
+          "A2",
+          "B1",
+          "B2",
+          "C1",
+          "C2"
+        ],
+        "notes": "Using a runtime assessment containing persisted language proficiency rows, verify the populated languages relation is returned and each row uses one of the four new mode values with the existing CEFR level scale. The endpoint and canonical company/id path structure are grounded in the server change."
+      }
+    },
+    {
+      "id": "api-2",
+      "persona": "company_admin",
+      "method": "POST",
+      "path": "UNKNOWN",
+      "body": {},
+      "expect": {
+        "status": "BLOCKED",
+        "notes": "A language create/update endpoint or complete request contract is not present in the supplied GitHub context. Resolve the endpoint, runtime language proficiency IDs, validation rules, and compatibility behavior before testing persistence of Listening, Speaking, Writing, and Reading or rejection of legacy Receptive and Productive fields."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "talent",
+      "goal": "Verify that the talent or scholar profile language section displays the four new language proficiency skills and no longer displays the legacy skills.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "On the resolved talent or scholar profile language section, Listening, Speaking, Writing, and Reading are visible for the language proficiency model, populated values use the existing CEFR scale from A1 through C2, and Receptive and Productive are not visible. The case is BLOCKED until the profile route and a compatible profile language state are supplied.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Listening"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Speaking"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Writing"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Reading"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Receptive"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Productive"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that the assessment language requirements editor uses the new four-skill proficiency structure.",
+      "startRoute": "/company/skills",
+      "successCriteria": "Using the runtime-resolved compatible assessment editor, open the Language Requirements editor and Level Adjustment without saving any changes. Verify Select Language, Proficiency Level, Listening, Speaking, Writing, Reading, and Level Adjustment are visible, while Receptive and Productive are not visible.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Language Requirements"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Select Language"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Proficiency Level"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Listening"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Speaking"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Writing"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Reading"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Level Adjustment"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Receptive"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Productive"
+        }
+      ]
+    }
+  ]
+}

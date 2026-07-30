@@ -10,7 +10,7 @@ The agent can:
 - Run API tests against staging.
 - Run browser tests against staging with Playwright/Stagehand.
 - Capture screenshots and videos as evidence.
-- Write PASS / FAIL / DONE / BLOCKED results into a markdown report.
+- Write PASS / FAIL / BLOCKED / MANUAL_REQUIRED / ERROR results into a markdown report.
 
 ---
 
@@ -110,43 +110,73 @@ Browser evidence is saved under:
 ---
 
 ## Result Statuses
+
 The report uses the following statuses:
 
-- **PASS:** The test ran and all expected checks passed.
-- **FAIL:** The test ran but at least one expected check failed.
-- **DONE:** The browser case completed navigation/actions and captured evidence, but had no explicit assertions.
-- **BLOCKED:** The case could not be executed because required route, persona, setup data, or context was missing.
-- **ERROR:** The case failed due to an execution/runtime error.
+- **PASS:** The case executed and all required assertions passed.
+- **FAIL:** The case executed and at least one required assertion failed with sufficient deterministic evidence.
+- **BLOCKED:** Execution was prevented by missing fixture data, an unresolved API contract, mutation safety policy, unsupported authentication, or another explicit prerequisite.
+- **MANUAL_REQUIRED:** The correct feature area was reached, but the runner or available evidence could not safely confirm the complete acceptance criterion.
+- **ERROR:** An unexpected execution or infrastructure error occurred.
 
 ---
 
 ## Current Capabilities
+
 The current agent supports:
 
-- Jira issue based test planning.
-- GitHub change context based test planning.
-- Generic browser steps such as:
-  - wait
-  - setViewport
-  - clickTopTab
-  - clickButton
-  - clickText
-  - assertTextVisible
-  - assertTextNotVisible
-- Static route resolution for known page areas.
-- Manager API based route resolution for company job details pages.
-- Firebase-based persona authentication.
+- Real Jira issue and GitHub change-context based planning.
+- Planner case budgets, fixture policies, URL assertion prerequisites, mutation safety rules, and schema normalization.
+- API endpoint and UI route manifest discovery.
+- Runtime company, project, talent, job, assessment, invoice, contract, work-setup, skill, and related execution-context resolution.
+- Source-grounded query-parameter preservation while resolving unknown endpoint bases.
+- API semantic assertions in addition to HTTP status checks.
+- Safe default blocking for mutating API requests.
+- Safe default blocking for browser mutations.
+- A dedicated QA-owned draft-job creation flow with exact redirect verification and exact cleanup.
+- Firebase-backed company-admin and talent browser personas.
 - Browser session reuse for consecutive cases with the same persona.
-- Markdown report generation with API/browser result summaries.
+- Generic browser actions including tab selection, menu opening, filtering, reload, URL assertions, text assertions, and safe option selection.
+- Semantic table-row matching and safe row-detail control discovery.
+- Runtime-compatible invoice and contract fixture selection where the plan explicitly permits compatible-state substitution.
+- Screenshot, checkpoint, video, trace, and structured deterministic evidence capture.
+- Screenshot and video evidence review with final PASS / FAIL / BLOCKED / MANUAL_REQUIRED reconciliation.
+- Canonical 13-issue regression execution with plan-hash verification and machine-readable blocked-reason taxonomy.
+- Planner reproducibility checks based on schema, safety, budget, and structural coverage contracts.
 
 ---
 
 ## Current Limitations
-- Some browser routes still require explicit resolver support.
-- Talent-side job details routes are not resolved yet.
-- Closed/draft job detail cases require matching staging test data.
-- Complex searchable or virtualized dropdowns need data-aware selection instead of coordinate-based scrolling.
-- Planner output depends on the quality of Jira and GitHub context.
+
+- Executability still depends on staging data, entity ownership, lifecycle state, and persona permissions.
+- Exact fixture policies intentionally block cases when the requested record is unavailable.
+- Deep or scrollable modal content may require scroll-aware, surface-scoped assertions.
+- Complex virtualized dropdowns and controls without accessible metadata may still require additional generic semantic interaction support.
+- Browser and API mutations are disabled by default; canonical mutation cases therefore remain BLOCKED unless an explicitly guarded canary is run.
+- Some network, download, redirect, permission, and backend-side acceptance criteria require dedicated deterministic oracles.
+- LLM wording can vary between fresh plans; reproducibility checks validate structural and safety contracts rather than byte-identical JSON.
+
+---
+
+
+## Validation and Reproducibility
+
+Run the canonical 13-issue regression:
+
+    QA_REGRESSION_PLAN_MODE=canonical \
+    QA_REGRESSION_RESUME=false \
+    QA_ALLOW_BROWSER_MUTATIONS=false \
+    QA_ALLOW_API_MUTATIONS=false \
+    QA_BROWSER_MUTATION_PREFLIGHT=false \
+    QA_ALLOW_BROWSER_EDIT_FLOWS=true \
+    QA_EVIDENCE_REVIEW=true \
+    bash scripts/run-final-13-regression.sh
+
+Check planner structural reproducibility for a Jira issue:
+
+    npm run check:planner-repro -- --issue AS-1066
+
+Planner reproducibility checks two fresh plans for schema validity, supported personas and actions, case budgets, fixture policy, mutation safety, and structural coverage consistency.
 
 ---
 

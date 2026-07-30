@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ollamaClient } from "../../llm/ollama-client.js";
+import {
+  getVisionModelOptions,
+  ollamaClient,
+} from "../../llm/ollama-client.js";
 import type {
+  BrowserEvidenceCheckpoint,
   EvidenceReviewConfidence,
   EvidenceReviewResult,
   EvidenceReviewVerdict,
@@ -32,6 +36,8 @@ type ReviewBrowserVideoEvidenceArgs = {
   currentReasonCategory: string;
   notes: string[];
   videoPath: string;
+  checkpointEvidence?:
+    BrowserEvidenceCheckpoint[];
   screenshotReview:
     | EvidenceReviewResult
     | null;
@@ -318,6 +324,9 @@ Rules:
 - If any failed assertion remains unexplained, the overall verdict must be INCONCLUSIVE.
 - Use the video to determine whether the required page, tab, modal, menu or form was ever reached.
 - Do not infer backend configuration or hidden record properties.
+- Structured checkpoint identity metadata records requested, runtime-selected and API-handoff identities for auditability. It is execution context, not visual proof by itself.
+- A selectionSource of api-handoff means the browser preferred an API-resolved entity. Confirm the visible entity and state from the ordered frames before relying on it.
+- Identity substitution is valid only when the declared fixture policy permits it.
 - TEST_DATA_ISSUE requires direct visible evidence of unsuitable test data.
 - PRODUCT_BUG requires visible evidence that the correct target state was reached and contradicted the expected behavior.
 - AUTOMATION_LIMITATION applies when the required nested UI state was never reached.
@@ -330,6 +339,44 @@ Rules:
 - temporalEvidence must contain at least one item.
 - Return only valid JSON.
 `.trim();
+
+    /*
+     * VIDEO_STRUCTURED_EVIDENCE_IDENTITY_V1
+     *
+     * Carry checkpoint identity into video fallback so the
+     * reviewer can correlate visible frames with the exact
+     * runtime-selected entity without treating metadata as
+     * visual proof.
+     */
+    const checkpointIdentities =
+      (args.checkpointEvidence ?? [])
+        .filter(
+          (checkpoint) =>
+            Boolean(
+              checkpoint.identity
+            )
+        )
+        .map(
+          (checkpoint) => ({
+            stepIndex:
+              checkpoint.stepIndex,
+            action:
+              checkpoint.action,
+            identity:
+              checkpoint.identity,
+          })
+        );
+
+    if (
+      checkpointIdentities.length > 0
+    ) {
+      console.log(
+        ` Video evidence received ` +
+          `${checkpointIdentities.length} ` +
+          `structured checkpoint ` +
+          `identity record(s).`
+      );
+    }
 
     const reviewContext = {
       issueKey: args.issueKey,
@@ -347,6 +394,7 @@ Rules:
         args.currentReasonCategory,
       runnerNotes:
         args.notes,
+      checkpointIdentities,
       screenshotReview:
         args.screenshotReview,
     };
@@ -354,7 +402,7 @@ Rules:
     const response =
       await ollamaClient.chat.completions.create({
         model: visionModel,
-        temperature: 0,
+        ...getVisionModelOptions(),
         response_format: {
           type: "json_object",
         },

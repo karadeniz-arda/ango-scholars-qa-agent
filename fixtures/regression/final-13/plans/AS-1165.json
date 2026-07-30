@@ -1,0 +1,129 @@
+{
+  "issueKey": "AS-1165",
+  "summary": "[Client] Add Work Setups UI for Job Setup, Talent Contract Details, and Company Review",
+  "notes": "The exact company management route supplied by the change context is /company/all-work-setups. Project management, job wizard, job details, hired-section, and talent contract routes are not supplied and remain UNKNOWN. No concrete company, project, job, talent, contract, work setup, family, or talent-job-work-setup IDs are available, so browser cases use exact runtime fixture policy and must be BLOCKED or MANUAL_REQUIRED until those fixtures and required states are resolved. Create, edit/version, attach, remove, talent completion/upload, rejection with note, and reupload mutation request schemas are incomplete in the supplied context; those flows require the generated API contract and runtime fixtures. Browser mutation actions are not included because only the dedicated draft-job redirect action is permitted for state-changing browser coverage. Unauthenticated browser coverage is not generated because the browser runner does not support unauthenticated execution. Permission-denial coverage requires a runtime user without VIEW_WORK_SETUPS, MANAGE_WORK_SETUPS, or REVIEW_WORK_SETUPS and is noted for manual/API execution.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/work-setups",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Verify the company Work Setups management data source returns the latest Work Setup versions for company/project management, including document requirement and reference-document metadata when present. The companyId must be resolved from execution context."
+      }
+    },
+    {
+      "id": "api-2",
+      "persona": "talent",
+      "method": "GET",
+      "path": "/talents/{talentId}/work-setups",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Verify the talent-facing Work Setup data source returns only Work Setups belonging to the authenticated talent's own active or started contracts and exposes status, document requirement, reference-document, and rejection-note data needed by contract details. The talentId and required contract state must be resolved from execution context."
+      }
+    },
+    {
+      "id": "api-3",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/talent-job-work-setups",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Verify the company job-details/hired-section data source returns Work Setup progress for hired talents so the UI can show the Work Setups column and open submitted work for review. The companyId and required job/talent state must be resolved from execution context."
+      }
+    },
+    {
+      "id": "api-4",
+      "persona": "company_admin",
+      "method": "POST",
+      "path": "/companies/{companyId}/talent-job-work-setups/{talentJobWorkSetupId}/approve",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "Verify a company user with review permission can approve a submitted Work Setup and that the resulting status is reflected after query refresh. A pending submitted talentJobWorkSetupId and companyId must be resolved from execution context; confirm the documented success status if the generated contract specifies a different 2xx response."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify the company All Work Setups management page uses Work Setups terminology and exposes the management surface for viewing Work Setup records and their document-related metadata.",
+      "startRoute": "/company/all-work-setups",
+      "successCriteria": "The page loads the Work Setups management surface and visibly uses the Work Setups label. When a compatible runtime Work Setup record is available, its reference-document and document-requirement information must use the Work Setup UI labels. Creation, editing/versioning, deletion, and permission-denied action visibility require manual follow-up because safe browser mutation and permission-specific fixtures are unavailable.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify the job wizard contains a Work Setups step and supports the empty state when the job has no attached Work Setups.",
+      "startRoute": "/company/all-work-setups",
+      "successCriteria": "After the runner resolves the job-create or job-edit wizard route and an exact job with zero Work Setups, the Work Setups step is visible, shows the grounded empty-state text, and does not prevent the remaining wizard flow from continuing. The route and exact job fixture are missing, so execution is BLOCKED until resolved.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickText",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "No work setups found"
+        }
+      ]
+    },
+    {
+      "id": "web-3",
+      "persona": "talent",
+      "goal": "Verify the talent contract details page places the Work Setups section above Compliance Requirements and presents the talent-facing Work Setup surface.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "After the runner resolves the exact talent contract details route and required active or started contract, Work Setups is visible above Compliance Requirements. Compact Work Setup cards must expose summary status and document-required indication without displaying the full rich-text description inline. Opening a specific card, completing a no-file setup, uploading or resubmitting a file, showing a rejection note, and verifying refresh require a runtime record opener and exact state that are not supplied; those portions are MANUAL_REQUIRED.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Compliance Requirements"
+        }
+      ]
+    },
+    {
+      "id": "web-4",
+      "persona": "company_admin",
+      "goal": "Verify Work Setup review visibility is available in the hired area of job details for jobs that have Work Setups.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "After the runner resolves the exact job-details route and a job with Work Setups and hired talent, the Hired area exposes Work Setup review visibility, including the Work Setups column or equivalent review entry. Opening a submitted record and verifying talent metadata, description, reference document, uploaded file, submitted time, approve action, rejection-note input, reject action, and reupload lifecycle require an exact submitted runtime record; browser mutation is prohibited and these checks are MANUAL_REQUIRED.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickText",
+          "text": "Hired"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Hired"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        }
+      ]
+    }
+  ]
+}

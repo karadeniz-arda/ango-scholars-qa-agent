@@ -1,0 +1,60 @@
+{
+  "issueKey": "AS-1011",
+  "summary": "Company - Payments :: Support Tab & Filter Tracking in Query Parameters",
+  "notes": "The change is client-side only; no server repository changes or API contracts were supplied, so no API cases are included. The exact browser routes are not present in the supplied context and are marked UNKNOWN. Resolve each route to the corresponding Company Payments or Company All Payments page before execution. The Jira ticket requires tab and filter query tracking, while the GitHub diff exposes the project query key; additional filter query keys are not available and require manual or contract-based coverage. Unauthenticated browser coverage is not generated because the browser runner does not support that persona. Planner case budget applied: retained 0 API and 1 browser cases; 1 duplicate, repeated-dependency, or lower-priority overflow case(s) were omitted.",
+  "apiCases": [],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that the Company Payments page synchronizes the active tab and the source-grounded project filter with URL query parameters, including restoration after reload.",
+      "startRoute": "/company/all-payments",
+      "successCriteria": "On the exact Company Payments page, selecting a safe inactive main-content tab adds a tab= query parameter. Selecting one safe runtime project filter option adds a project= query parameter. After reload, both query keys remain present. The exact tab-to-value and project-to-value mappings cannot be verified because their concrete labels and values were not supplied.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "selectRuntimeTopTab"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "tab="
+        },
+        {
+          "action": "reload"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "tab="
+        },
+        {
+          "action": "openMenu",
+          "text": "Filters"
+        },
+        {
+          "action": "selectRuntimeFilterOption",
+          "queryKey": "project",
+          "hint": "Project"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "project="
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "tab="
+        },
+        {
+          "action": "reload"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "project="
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "tab="
+        }
+      ]
+    }
+  ]
+}

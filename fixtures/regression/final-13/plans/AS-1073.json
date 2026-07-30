@@ -1,0 +1,46 @@
+{
+  "issueKey": "AS-1073",
+  "summary": "UI - Fetch Selected Skills with New Skill IDs Filter to Avoid Stale Data",
+  "notes": "The supplied context confirms the skill API supports category, mainDiscipline, and skillIds filters, and that selected skills are fetched by normalized IDs with limit equal to the selected-ID count and offset 0. It does not provide the endpoint base path, browser route, concrete selected skill IDs, or a runtime record fixture. The API and browser cases must be marked BLOCKED or MANUAL_REQUIRED until those execution details are resolved; do not substitute other skill records. Static review is also required to confirm that the obsolete hardcoded facet-fetch approach has no remaining uses. Unauthenticated browser coverage is not included because the browser runner does not support unauthenticated execution. Planner case budget applied: retained 1 API and 1 browser cases; 1 duplicate, repeated-dependency, or lower-priority overflow case(s) were omitted.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/skills",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "BLOCKED until the canonical skills endpoint path and a fixture containing selected skill IDs are supplied. Verify that the initial selected-skills request sends the skillIds filter using the normalized selected IDs, requests limit equal to the number of normalized IDs, uses offset 0, and returns the selected skill records without relying on a large hardcoded facet limit."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that opening the skill selector with an existing selected-skill state loads the selected skills on the first load through the skill-IDs request and displays the selected skills without stale or missing data.",
+      "startRoute": "/company/skills",
+      "successCriteria": "BLOCKED until the exact skill-selector route and exact selected skill ID fixture are supplied. The runner must open that exact runtime state, verify that every requested selected skill is represented after the initial load, and verify that undefined and null values are not rendered. It must not replace the requested selected-skill state with another record.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "wait",
+          "ms": 1000
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Skills"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    }
+  ]
+}

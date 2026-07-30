@@ -1,0 +1,56 @@
+{
+  "issueKey": "AS-1190",
+  "summary": "Update Work Setups Helper and Empty State Copy on Contract Details",
+  "notes": "This is a client-only copy change; no server changes or API contract are provided, so no API cases are included. The contract details browser route and exact contract, talent, and job fixtures are not supplied. Both browser cases therefore require an exact runtime contract fixture and may be BLOCKED until the route and fixture are resolved. Manual verification is required to confirm that existing Work Setups cards and statuses remain unchanged in a populated contract and that the Compliance Requirements section remains unchanged. Unauthenticated browser coverage is not included because the browser runner does not support unauthenticated execution.",
+  "apiCases": [],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "talent",
+      "goal": "Verify the Work Setups helper text on the contract details page for a contract with assigned work setups, while confirming the Work Setups and Compliance Requirements sections remain present.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "On the exact contract details fixture with assigned work setups, the Work Setups section displays \"Complete the following work setups to get started.\" and does not display the previous helper text. Existing work setup cards and statuses remain visible for manual verification, and the Compliance Requirements section remains visible.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Complete the following work setups to get started."
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "Complete these work setups for your contract. Some require a document upload for review."
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Compliance Requirements"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "talent",
+      "goal": "Verify the Work Setups empty state copy on the contract details page for an exact contract with no assigned work setups.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "On the exact contract details fixture with no assigned work setups, the Work Setups section displays \"No work setups are assigned to this job.\" and does not display the previous contract-based empty state text.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Work Setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "No work setups are assigned to this job."
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "No work setups are assigned to this contract."
+        }
+      ]
+    }
+  ]
+}

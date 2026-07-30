@@ -135,16 +135,32 @@ function inferWantedArea(text: string): string | undefined {
     return "jobs";
   }
 
-  if (text.includes("contract")) return "contracts";
-  if (text.includes("offer")) return "offers";
-
+  /**
+   * Invoice/payment language must be evaluated before generic
+   * "contract" wording. Phrases such as "response contract"
+   * describe an API schema, not the Contracts product area.
+   */
   if (
+    text.includes("invoice") ||
     text.includes("payment") ||
     text.includes("payout") ||
     text.includes("timesheet")
   ) {
     return "payments";
   }
+
+  if (
+    text.includes("contract details") ||
+    text.includes("talent contract") ||
+    text.includes("company contract") ||
+    text.includes("/contracts") ||
+    text.includes("contracts endpoint") ||
+    text.includes("contract list")
+  ) {
+    return "contracts";
+  }
+
+  if (text.includes("offer")) return "offers";
 
   if (text.includes("language")) return "languages";
 
@@ -194,6 +210,33 @@ function isTalentLanguageProfileCase(text: string): boolean {
   );
 }
 
+function isInvoicePaymentCase(text: string): boolean {
+  return (
+    text.includes("invoice") ||
+    text.includes("invoice details") ||
+    text.includes("invoice-detail")
+  );
+}
+
+function isCanonicalInvoiceDetailPath(
+  endpoint: ApiEndpointEntry
+): boolean {
+  const path = String(
+    endpoint.path || ""
+  ).toLowerCase();
+
+  const params = (
+    endpoint.params || []
+  ).map((param) =>
+    String(param).toLowerCase()
+  );
+
+  return (
+    params.includes("invoiceid") &&
+    /\/invoices\/\{invoiceid\}$/.test(path)
+  );
+}
+
 function endpointPassesRelevanceGate(
   endpoint: ApiEndpointEntry,
   wantedArea: string | undefined,
@@ -211,6 +254,31 @@ function endpointPassesRelevanceGate(
     wantedArea &&
     selectedArea &&
     !areApiAreasCompatible(wantedArea, selectedArea)
+  ) {
+    return false;
+  }
+
+  /**
+   * Contracts, offers, and payments sometimes share data, but an
+   * invoice-details API case must never be enriched to a generic
+   * contracts or offers endpoint.
+   */
+  if (
+    isInvoicePaymentCase(caseText) &&
+    selectedArea !== "payments"
+  ) {
+    return false;
+  }
+
+  /**
+   * A details request must not resolve to the invoice list,
+   * approve, cancel, export, or another invoice action route.
+   */
+  if (
+    wantedArea === "payments" &&
+    isInvoicePaymentCase(caseText) &&
+    wantsDetailEndpoint(caseText) &&
+    !isCanonicalInvoiceDetailPath(endpoint)
   ) {
     return false;
   }
@@ -741,6 +809,11 @@ function scoreEndpoint(endpoint: ApiEndpointEntry, plan: any, apiCase: any): num
   const jobsDetailPath = isJobsDetailPath(endpointPath, params);
   const jobsListPath = isJobsListPath(endpointPath, params);
 
+  const invoiceDetailIntent =
+    wantedArea === "payments" &&
+    isInvoicePaymentCase(caseText) &&
+    wantsDetailEndpoint(caseText);
+
   if (!endpointPath.startsWith("/")) return -999;
 
   let score = 0;
@@ -762,6 +835,17 @@ function scoreEndpoint(endpoint: ApiEndpointEntry, plan: any, apiCase: any): num
 
   if (wantedArea && endpointArea === wantedArea) score += 80;
   if (wantedArea && lowerPath.includes(wantedArea)) score += 40;
+
+  /**
+   * Invoice detail cases require the canonical item endpoint.
+   * Give that exact shape enough confidence to beat the list route.
+   */
+  if (
+    invoiceDetailIntent &&
+    isCanonicalInvoiceDetailPath(endpoint)
+  ) {
+    score += 100;
+  }
 
   /**
    * AS-1073 / SkillSelector:

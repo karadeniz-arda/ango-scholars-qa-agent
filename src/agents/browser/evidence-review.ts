@@ -1,7 +1,11 @@
 import fs from "node:fs";
-import { ollamaClient } from "../../llm/ollama-client.js";
+import {
+  getVisionModelOptions,
+  ollamaClient,
+} from "../../llm/ollama-client.js";
 
 export type EvidenceReviewVerdict =
+  | "PASS_CONFIRMED"
   | "PRODUCT_BUG"
   | "AUTOMATION_LIMITATION"
   | "TEST_DATA_ISSUE"
@@ -13,12 +17,60 @@ export type EvidenceReviewConfidence =
   | "medium"
   | "high";
 
+export type BrowserEvidenceIdentity = {
+  entityType: string;
+  requestedIdentity: string | null;
+  runtimeIdentity: string | null;
+  handoffIdentity: string | null;
+  substituted: boolean;
+  policy: string | null;
+  selectionSource:
+    | "planner"
+    | "api-handoff"
+    | "runtime-discovery"
+    | "step";
+};
+
+export type BrowserEvidenceCheckpoint = {
+  stepIndex: number;
+  action: string;
+  label: string;
+  note: string;
+  screenshotPath: string;
+  url: string;
+  identity?: BrowserEvidenceIdentity;
+};
+
+/*
+ * EXACT_CLEANUP_STRUCTURED_EVIDENCE_V1
+ *
+ * URL assertions and exact resource cleanup are
+ * machine evidence. They prove only their own
+ * narrowly defined claim.
+ */
+export type BrowserDeterministicEvidence = {
+  stepIndex: number;
+  action:
+    | "assertUrlContains"
+    | "assertUrlNotContains"
+    | "assertTextVisible"
+    | "assertTextNotVisible"
+    | "openRuntimeControl"
+    | "resolveRuntimeInvoiceFixture"
+    | "cleanupExactCreatedJob";
+  expected: string;
+  actualUrl?: string;
+  passed: boolean;
+  note: string;
+};
+
 export type EvidenceReviewResult = {
   verdict: EvidenceReviewVerdict;
   confidence: EvidenceReviewConfidence;
   rationale: string;
   visibleEvidence: string[];
   recommendedStatus:
+    | "PASS"
     | "FAIL"
     | "MANUAL_REQUIRED";
 };
@@ -26,10 +78,15 @@ export type EvidenceReviewResult = {
 type ReviewBrowserEvidenceArgs = {
   testCase: any;
   currentStatus:
+    | "PASS"
     | "FAIL"
     | "MANUAL_REQUIRED";
   currentReasonCategory: string;
   screenshotPath: string;
+  checkpointEvidence?:
+    BrowserEvidenceCheckpoint[];
+  deterministicEvidence?:
+    BrowserDeterministicEvidence[];
   currentUrl: string;
   notes: string[];
 };
@@ -70,6 +127,7 @@ function isValidVerdict(
   value: unknown
 ): value is EvidenceReviewVerdict {
   return [
+    "PASS_CONFIRMED",
     "PRODUCT_BUG",
     "AUTOMATION_LIMITATION",
     "TEST_DATA_ISSUE",
@@ -117,16 +175,80 @@ export async function reviewBrowserEvidence(
   }
 
   try {
-    const imageBase64 = fs
-      .readFileSync(args.screenshotPath)
-      .toString("base64");
+    const deterministicEvidence =
+      (args.deterministicEvidence ?? [])
+        .slice(0, 20);
+
+    const checkpointEvidence =
+      (args.checkpointEvidence ?? [])
+        .filter(
+          (checkpoint) =>
+            fs.existsSync(
+              checkpoint.screenshotPath
+            )
+        )
+        .slice(0, 8);
+
+    const evidenceImages = [
+      ...checkpointEvidence.map(
+        (checkpoint) => ({
+          kind: "checkpoint" as const,
+          label:
+            `Step ${checkpoint.stepIndex}: ` +
+            checkpoint.label,
+          path:
+            checkpoint.screenshotPath,
+          url: checkpoint.url,
+          identity:
+            checkpoint.identity ?? null,
+        })
+      ),
+      {
+        kind: "final" as const,
+        label: "Final screenshot",
+        path: args.screenshotPath,
+        url: args.currentUrl,
+        identity: null,
+      },
+    ];
+
+    console.log(
+      ` Evidence review using ` +
+        `${checkpointEvidence.length} ` +
+        `checkpoint screenshot(s) ` +
+        `plus the final screenshot.`
+    );
 
     const systemPrompt = `
 You are reviewing evidence produced by a QA browser agent.
 
-Classify why a browser case currently ended as FAIL or MANUAL_REQUIRED.
+Audit whether the current browser result is supported by the ordered screenshot evidence and any structured deterministic machine evidence.
+
+The evidence may contain screenshots captured immediately after successful safe browser actions, followed by a final screenshot. Treat the image sequence as chronological evidence from earlier to later.
+
+The current result may be PASS, FAIL or MANUAL_REQUIRED.
 
 Allowed verdicts:
+
+PASS_CONFIRMED:
+Use when the ordered screenshots directly show:
+- the correct route and feature area;
+- the required UI state;
+- the acceptance-level visual product behavior described by the case.
+
+A nonvisual agent-safety postcondition such as exact deletion
+of the uniquely created test resource may instead be proven by
+a passed cleanupExactCreatedJob structured machine assertion.
+That cleanup operation does not require screenshot proof.
+
+Multiple screenshots may jointly prove a temporal UI behavior. For example, an earlier checkpoint may show an open menu and its available options, while later checkpoints show each requested option as the selected value.
+
+Do not use PASS_CONFIRMED when:
+- a permission or fixture prerequisite is not visibly established;
+- only generic page shell text is visible;
+- only undefined/null sanity assertions passed;
+- the required modal, menu, drawer or filtered state is never visibly reached in any screenshot;
+- the ordered screenshots cannot directly support the assertion.
 
 PRODUCT_BUG:
 The screenshot clearly shows the correct feature, route and UI state,
@@ -149,6 +271,40 @@ The screenshot alone does not contain enough evidence to classify safely.
 
 Rules:
 - Be conservative.
+- Runner notes saying PASS are not proof by themselves.
+- Checkpoint screenshots are visual evidence; their labels only describe when they were captured and are not proof on their own.
+- Structured checkpoint identity metadata records requested, runtime-selected and API-handoff identities for auditability. It is execution context, not visual proof by itself.
+- A selectionSource value of api-handoff means the browser preferred an API-resolved entity; confirm the visible entity and state from screenshot evidence before relying on it.
+- The currentUrl field alone is context, not proof.
+- assertUrlContains and assertUrlNotContains deterministicEvidence entries are direct Playwright URL assertions. Treat them as authoritative only for their exact URL claim.
+- assertTextVisible and assertTextNotVisible deterministicEvidence entries are direct Playwright visibility assertions. Treat them as authoritative only for the exact text-presence or text-absence claim recorded in that entry.
+- Text visibility machine evidence does not prove route correctness, record identity, table state, permissions, backend contents or that an unopened drawer contains the text.
+- Text visibility evidence may support PASS only when screenshot evidence shows the correct feature area and the required drawer, modal, panel or detail surface is visibly open.
+- resolveRuntimeInvoiceFixture deterministicEvidence proves only the recorded runtime invoice selection and required table-view selection performed by the specialized resolver.
+- A runtime invoice may replace the planner invoice only when runtimeFixturePolicy is explicitly "compatible-state". Without that explicit policy, a requested invoice mismatch remains a fixture/oracle issue.
+- cleanupExactCreatedJob deterministicEvidence is an exact runner-owned API cleanup assertion. A passed entry proves only that the uniquely identified created test resource was deleted successfully by the exact cleanup operation recorded in that entry.
+- Cleanup machine evidence does not prove the preceding UI creation or redirect behavior. Those claims still require their own screenshot and URL evidence.
+- A passed deterministic URL assertion may prove URL query synchronization, preservation, removal, or reload retention only at the step where it was captured.
+- Deterministic URL evidence does not prove backend requests, record ordering, permissions, persistence beyond the tested reload, or that a visual control restored correctly. Those claims still need matching screenshot evidence or another supported oracle.
+- When screenshots prove the created draft details state and the exact redirect, do not return INCONCLUSIVE solely because successful exact cleanup is not visually shown when a passed cleanupExactCreatedJob assertion is provided.
+- A failed deterministic URL assertion must not be dismissed merely because the browser address bar is absent from the screenshot.
+- A closed final menu does not invalidate an earlier checkpoint that visibly proves the menu opened and displayed the required options.
+- Distinct checkpoints may prove successive option selections when each selected value is visibly shown.
+- A selectRuntimeTopTab checkpoint may prove that a visible inactive main-content tab became selected only when the selected state is visually apparent in that checkpoint.
+- When a later reload checkpoint is provided, compare the visible selected tab before and after reload before claiming visual tab restoration.
+- The runtime-selected tab label in runner notes is context only; the screenshot must visibly support the selected state.
+- A selectRuntimeFilterOption checkpoint may prove that a safe visible filter option was selected only when the related filter control or selected value is visibly apparent.
+- A runtime filter URL transition plus a passed deterministic query assertion proves only that the grounded query key changed and is present. It does not prove the returned records are correctly filtered.
+- When reload evidence is included for a filter case, compare the visible selected filter state before and after reload before claiming visual restoration.
+- A key-only deterministic assertion such as "tab=" or "project=" proves query-key presence but not the exact selected-label-to-query-value mapping.
+- Do not infer data ordering, backend query parameters, persistence, permissions or network behavior merely from a selected UI label.
+- If the case mixes a visually proven interaction with an unproven semantic requirement, do not confirm the whole case; return INCONCLUSIVE or AUTOMATION_LIMITATION as appropriate.
+- A negative assertion can be confirmed only when the relevant
+  product region and required UI state are visibly present.
+- When PASS depends on invisible permissions, seeded data,
+  hidden configuration or an unopened UI state, return
+  INCONCLUSIVE.
+- PASS_CONFIRMED should normally require high confidence.
 - Do not call something PRODUCT_BUG only because expected text is absent.
 - PRODUCT_BUG requires visible evidence that the correct route and UI state were reached.
 - A closed modal, unopened dropdown or missing interaction is usually AUTOMATION_LIMITATION.
@@ -157,7 +313,7 @@ Rules:
 Return exactly this JSON structure:
 
 {
-  "verdict": "PRODUCT_BUG | AUTOMATION_LIMITATION | TEST_DATA_ISSUE | WRONG_ROUTE | INCONCLUSIVE",
+  "verdict": "PASS_CONFIRMED | PRODUCT_BUG | AUTOMATION_LIMITATION | TEST_DATA_ISSUE | WRONG_ROUTE | INCONCLUSIVE",
   "confidence": "low | medium | high",
   "rationale": "A specific explanation grounded in the screenshot",
   "visibleEvidence": [
@@ -206,13 +362,82 @@ Additional evidence rules:
       currentReasonCategory:
         args.currentReasonCategory,
       currentUrl: args.currentUrl,
+      runtimeFixturePolicy:
+        args.testCase
+          .runtimeFixturePolicy ??
+        "exact",
+      runtimeInvoiceFixture:
+        args.testCase
+          .runtimeInvoiceFixture ??
+        null,
       runnerNotes: args.notes,
+      deterministicEvidence,
+      evidenceSequence:
+        evidenceImages.map(
+          (evidence, index) => ({
+            imageNumber: index + 1,
+            kind: evidence.kind,
+            label: evidence.label,
+            url: evidence.url,
+            identity:
+              evidence.identity,
+          })
+        ),
     };
+
+    const messageContent: any[] = [
+      {
+        type: "text",
+        text:
+          "Review this ordered browser evidence:\n" +
+          JSON.stringify(
+            reviewContext,
+            null,
+            2
+          ),
+      },
+    ];
+
+    for (
+      let index = 0;
+      index < evidenceImages.length;
+      index += 1
+    ) {
+      const evidence =
+        evidenceImages[index];
+
+      if (!evidence) {
+        continue;
+      }
+
+      const imageBase64 = fs
+        .readFileSync(evidence.path)
+        .toString("base64");
+
+      messageContent.push(
+        {
+          type: "text",
+          text:
+            `Image ${index + 1} of ` +
+            `${evidenceImages.length}: ` +
+            `${evidence.label} ` +
+            `(URL: ${evidence.url})`,
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url:
+              "data:image/png;base64," +
+              imageBase64,
+          },
+        }
+      );
+    }
 
     const response =
     await ollamaClient.chat.completions.create({
         model: visionModel,
-        temperature: 0,
+        ...getVisionModelOptions(),
         response_format: {
           type: "json_object",
         },
@@ -223,26 +448,7 @@ Additional evidence rules:
           },
           {
             role: "user",
-            content: [
-              {
-                type: "text",
-                text:
-                  "Review this browser evidence:\n" +
-                  JSON.stringify(
-                    reviewContext,
-                    null,
-                    2
-                  ),
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url:
-                    "data:image/png;base64," +
-                    imageBase64,
-                },
-              },
-            ] as any,
+            content: messageContent as any,
           },
         ],
       });
@@ -319,13 +525,49 @@ if (
 
 const verdict = parsed.verdict;
 
+/*
+ * COMPARISON_VALUE_FALSE_PASS_GUARD_V1
+ *
+ * Plain text-visibility assertions prove labels only.
+ * Until dedicated full comparison-value coverage exists,
+ * they cannot confirm CURRENT/PROPOSED value requirements.
+ */
+const criteriaText = JSON.stringify(
+  args.testCase.successCriteria ?? ""
+).toLowerCase();
+
+const requiresComparisonValues =
+  criteriaText.includes("current") &&
+  criteriaText.includes("proposed") &&
+  criteriaText.includes("value");
+
+if (
+  verdict === "PASS_CONFIRMED" &&
+  requiresComparisonValues
+) {
+  return {
+    verdict: "INCONCLUSIVE",
+    confidence: "high",
+    rationale:
+      "The case requires current and proposed comparison " +
+      "values, but the available structured evidence proves " +
+      "only text visibility. PASS cannot be confirmed safely.",
+    visibleEvidence,
+    recommendedStatus: "MANUAL_REQUIRED",
+  };
+}
+
 const recommendedStatus:
+  | "PASS"
   | "FAIL"
   | "MANUAL_REQUIRED" =
-  verdict === "PRODUCT_BUG" &&
+  verdict === "PASS_CONFIRMED" &&
   parsed.confidence === "high"
-    ? "FAIL"
-    : "MANUAL_REQUIRED";
+    ? "PASS"
+    : verdict === "PRODUCT_BUG" &&
+        parsed.confidence === "high"
+      ? "FAIL"
+      : "MANUAL_REQUIRED";
 
 return {
   verdict,

@@ -1,0 +1,76 @@
+{
+  "issueKey": "AS-1139",
+  "summary": "Fix Wrong redirect after the job creation",
+  "notes": "The Jira description and acceptance criteria are empty, so scope is inferred from the summary and the implementation evidence in JobWizard.route.tsx. API coverage is not included because the server repository has no AS-1139 change or supplied endpoint contract. Browser coverage verifies the post-creation redirect for both the standard Jobs origin and the All Jobs origin. Unauthenticated browser coverage is not included because the browser runner does not support unauthenticated execution.",
+  "apiCases": [],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that creating a draft job from the standard Jobs workflow redirects to the created job details route with the created project's query parameter.",
+      "startRoute": "/company/jobs/create",
+      "successCriteria": "After the dedicated draft-job creation workflow completes, the browser is redirected to a route containing /company/jobs/ and project=. The URL does not contain jobId=, undefined, or null.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "createDraftJobAndVerifyRedirect",
+          "origin": "jobs"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "/company/jobs/"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "project="
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "jobId="
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "undefined"
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that creating a draft job from the All Jobs workflow redirects to the created job details route under the All Jobs path with the created project's query parameter.",
+      "startRoute": "/company/jobs/create?origin=all-jobs",
+      "successCriteria": "After the dedicated draft-job creation workflow completes, the browser is redirected to a route containing /company/all-jobs/ and project=. The URL does not contain jobId=, undefined, or null.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "createDraftJobAndVerifyRedirect",
+          "origin": "all-jobs"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "/company/all-jobs/"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "project="
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "jobId="
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "undefined"
+        },
+        {
+          "action": "assertUrlNotContains",
+          "text": "null"
+        }
+      ]
+    }
+  ]
+}

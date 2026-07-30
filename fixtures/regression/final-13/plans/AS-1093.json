@@ -1,0 +1,183 @@
+{
+  "issueKey": "AS-1093",
+  "summary": "UI - Add Publish Job Change Request Type",
+  "notes": "Browser routes and concrete job or change-request fixtures were not supplied, so UNKNOWN routes require a runtime resolver. The publish-request creation API path and response contract are not visible in the supplied context; the representative API case is therefore blocked until the existing contract is resolved. Browser mutation is intentionally not performed because generic state-changing browser actions are unsupported. Apply and reject must be manually verified against the existing change-request endpoints because the server repository provided no AS-1093 changes and the ticket states that no API changes are required. Unauthenticated browser coverage is not generated because the browser runner does not support that persona. Permission-negative and non-draft visibility coverage requires a runtime permission/state fixture.",
+  "apiCases": [
+    {
+      "id": "api-1",
+      "persona": "company_admin",
+      "method": "GET",
+      "path": "/companies/{companyId}/jobs/change-requests?type=publish-request",
+      "body": {},
+      "expect": {
+        "status": 200,
+        "notes": "The change-request list request accepts the grounded type=publish-request filter and returns publish requests whose type is publish-request. Repeat with the grounded type=field-update-request value during execution to verify the second supported type option."
+      }
+    },
+    {
+      "id": "api-2",
+      "persona": "company_admin",
+      "method": "POST",
+      "path": "UNKNOWN",
+      "body": {
+        "changeRequestType": "publish-request"
+      },
+      "expect": {
+        "status": "UNKNOWN",
+        "notes": "Blocked until the existing create job change request endpoint and required path parameters are resolved. The request must create a publish-request using the existing endpoint without requiring a new API contract, and the created request must be retrievable from the company change-request list."
+      }
+    }
+  ],
+  "browserCases": [
+    {
+      "id": "web-1",
+      "persona": "company_admin",
+      "goal": "Verify that a user with job change request permission but without job publish permission sees the Request Publish button on a draft job details page.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "After opening a runtime-resolved draft job for a company_admin configured with job change request permission and without job publish permission, Request Publish is visible. The route and exact draft-job fixture must be resolved at execution time.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "assertTextVisible",
+          "text": "Request Publish"
+        }
+      ]
+    },
+    {
+      "id": "web-2",
+      "persona": "company_admin",
+      "goal": "Verify that a publish request is displayed in the job change requests table and that its comparison view contains the full job details.",
+      "startRoute": "UNKNOWN",
+      "successCriteria": "Open the job change requests table, open a publish request, and verify that the comparison view includes the current and proposed values for Status, Title, Job description, Countries, Country rate map, Rate type, Start date, End date, Target headcount, Visibility, Application stages, Skills, Languages, Assessments, Compliance requirements, Work setups, External ID, Internal notes, Workspace email, and Timesheet config. The runtime resolver must provide the required table and publish-request state.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "clickText",
+          "text": "Change requests"
+        },
+        {
+          "action": "clickText",
+          "text": "Publish request"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Status"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Title"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Job description"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Countries"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Country rate map"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Rate type"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Start date"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "End date"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Target headcount"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Visibility"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Application stages"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Skills"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Languages"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Assessments"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Compliance requirements"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Work setups"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "External ID"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Internal notes"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Workspace email"
+        },
+        {
+          "action": "assertTextVisible",
+          "text": "Timesheet config"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "undefined"
+        },
+        {
+          "action": "assertTextNotVisible",
+          "text": "null"
+        }
+      ]
+    },
+    {
+      "id": "web-3",
+      "persona": "company_admin",
+      "goal": "Verify that the job change requests table exposes a type filter and synchronizes a selected type filter to the URL.",
+      "startRoute": "/company/all-jobs",
+      "successCriteria": "On the runtime-resolved job change requests table, opening Filters and selecting one safe runtime type option changes the exact grounded type query key in the URL. After reload, the type query key remains present. This verifies UI URL synchronization only; returned-record filtering must be confirmed through API or manual network inspection.",
+      "runtimeFixturePolicy": "exact",
+      "steps": [
+        {
+          "action": "openMenu",
+          "text": "Filters"
+        },
+        {
+          "action": "selectRuntimeFilterOption",
+          "queryKey": "type",
+          "hint": "Type"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "type="
+        },
+        {
+          "action": "reload"
+        },
+        {
+          "action": "assertUrlContains",
+          "text": "type="
+        }
+      ]
+    }
+  ]
+}
