@@ -1553,7 +1553,7 @@ export async function resolveBrowserRoute(
 
   /**
    * 3. Let code/context discovery select feature-area routes before broad fallbacks.
-   * This is what prevents AS-1165 Work Setups page cases from falling into /company/all-jobs.
+   * This prevents Work Setups page cases from falling into /company/all-jobs.
    */
   const discoveredRoute = getBestDiscoveredBrowserRoute(plan, testCase);
 
@@ -1593,7 +1593,7 @@ export async function resolveBrowserRoute(
 
   /**
    * 6. Broad jobs fallback.
-   * Important: this uses caseText, not planText, to avoid AS-1165 plan notes
+   * Important: this uses caseText, not planText, to avoid unrelated plan-level notes
    * forcing every Work Setups case into /company/all-jobs.
    */
   if (

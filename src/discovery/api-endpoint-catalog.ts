@@ -848,7 +848,7 @@ function scoreEndpoint(endpoint: ApiEndpointEntry, plan: any, apiCase: any): num
   }
 
   /**
-   * AS-1073 / SkillSelector:
+   * SkillSelector contract:
    * Prefer general skills metadata/list/filter endpoints.
    * Avoid deep job-specific skill routes because they require jobId and are
    * usually not the endpoint for skillIds/category/mainDiscipline filtering.

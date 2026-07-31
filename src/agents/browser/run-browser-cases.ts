@@ -364,14 +364,18 @@ if (relevanceBlockReason) {
 
 if (
   isAssessmentLanguageModalCase(testCase) &&
+  hasAssessmentLanguagePersistMutationStep(
+    testCase
+  ) &&
   !browserEditFlowsAllowed()
 ) {
   return (
-    "Assessment language modal requires entering " +
-    "an edit flow. Browser edit flows are disabled " +
-    "by default to protect staging data. " +
-    "Set QA_ALLOW_BROWSER_EDIT_FLOWS=true only " +
-    "for isolated test data."
+    "Assessment language case includes an action " +
+    "that may persist changes. Browser edit-flow " +
+    "mutations are disabled by default to protect " +
+    "staging data. Set " +
+    "QA_ALLOW_BROWSER_EDIT_FLOWS=true only for " +
+    "isolated test data."
   );
 }
 
@@ -1240,7 +1244,7 @@ function buildEvidenceReviewCase(
       testCase?.successCriteria || ""
     ).trim();
 
-  const automatedCriteria =
+  const legacyAutomatedCriteria =
     successCriteria
       .split(
         /(?<=[.!?])\s+|\n+/
@@ -1266,14 +1270,43 @@ function buildEvidenceReviewCase(
               sentence
             )
           )
-      )
-      .join(" ");
+      );
+
+  const automatedChecks =
+    Array.isArray(
+      testCase?.automatedChecks
+    )
+      ? testCase.automatedChecks
+          .map((check: unknown) =>
+            String(check ?? "").trim()
+          )
+          .filter(Boolean)
+      : [];
+
+  const reviewCriteria =
+    automatedChecks.length > 0
+      ? automatedChecks
+      : legacyAutomatedCriteria;
 
   return {
     ...testCase,
     successCriteria:
-      automatedCriteria ||
+      reviewCriteria.join(" ") ||
       String(testCase?.goal || ""),
+    automatedChecks:
+      reviewCriteria,
+    manualChecks:
+      Array.isArray(
+        testCase?.manualChecks
+      )
+        ? testCase.manualChecks
+        : [],
+    fixtureRequirements:
+      Array.isArray(
+        testCase?.fixtureRequirements
+      )
+        ? testCase.fixtureRequirements
+        : [],
   };
 }
 
@@ -1600,6 +1633,51 @@ function browserEditFlowsAllowed(): boolean {
   );
 }
 
+/*
+ * ASSESSMENT_LANGUAGE_PERSISTENCE_GUARD_V1
+ *
+ * Opening Edit, Configure or Level Adjustment is safe when
+ * the case is observational and the runner exits with Cancel.
+ * Only actions that can persist or submit changes require the
+ * explicit edit-flow safety flag.
+ */
+function hasAssessmentLanguagePersistMutationStep(
+  testCase: any
+): boolean {
+  const steps = Array.isArray(
+    testCase?.steps
+  )
+    ? testCase.steps
+    : [];
+
+  const persistenceText =
+    /\b(save|submit|update|create|delete|remove|confirm|approve|reject|publish|complete|upload|reupload|send)\b/i;
+
+  return steps.some((step: any) => {
+    const action = String(
+      step?.action || ""
+    ).trim();
+
+    if (
+      action ===
+      "createDraftJobAndVerifyRedirect"
+    ) {
+      return true;
+    }
+
+    if (
+      action !== "clickButton" &&
+      action !== "clickText"
+    ) {
+      return false;
+    }
+
+    return persistenceText.test(
+      String(step?.text || "").trim()
+    );
+  });
+}
+
 function isAssessmentLanguageCase(
   testCase: any
 ): boolean {
@@ -1634,26 +1712,88 @@ function isAssessmentLanguageCase(
 function isAssessmentLanguageModalCase(
   testCase: any
 ): boolean {
-  const caseText = [
-    String(testCase?.goal || ""),
-    String(
-      testCase?.successCriteria || ""
-    ),
-  ]
-    .join(" ")
-    .toLowerCase()
-    .replace(/[-_]+/g, " ");
+const caseText = [
+  String(testCase?.goal || ""),
+  String(
+    testCase?.successCriteria || ""
+  ),
+  ...(Array.isArray(
+    testCase?.automatedChecks
+  )
+    ? testCase.automatedChecks
+    : []),
+  ...(Array.isArray(
+    testCase?.manualChecks
+  )
+    ? testCase.manualChecks
+    : []),
+  ...(Array.isArray(
+    testCase?.fixtureRequirements
+  )
+    ? testCase.fixtureRequirements
+    : []),
+]
+  .map((value) =>
+    String(value || "")
+  )
+  .join(" ")
+  .toLowerCase()
+  .replace(/[-_]+/g, " ");
+
+  const steps = Array.isArray(
+    testCase?.steps
+  )
+    ? testCase.steps
+    : [];
+
+  const hasEditorNavigationStep =
+    steps.some((step: any) => {
+      if (
+        step?.action !== "clickButton"
+      ) {
+        return false;
+      }
+
+      const text = String(
+        step?.text || ""
+      )
+        .trim()
+        .toLowerCase();
+
+      return (
+        text === "configure" ||
+        text === "level adjustment"
+      );
+    });
+  const hasEditorScope =
+  caseText.includes(
+    "language requirements"
+  ) &&
+  [
+    "level adjustment",
+    "proficiency level",
+    "configure",
+    "edit state",
+    "edit assessment",
+    "editing",
+  ].some((term) =>
+    caseText.includes(term)
+  );
 
   return (
     isAssessmentLanguageCase(testCase) &&
-    [
-      "modal",
-      "editor",
-      "edit flow",
-      "edit assessment",
-      "editing",
-    ].some((term) =>
-      caseText.includes(term)
+    (
+ hasEditorNavigationStep ||
+hasEditorScope ||
+      [
+        "modal",
+        "editor",
+        "edit flow",
+        "edit assessment",
+        "editing",
+      ].some((term) =>
+        caseText.includes(term)
+      )
     )
   );
 }
@@ -1881,12 +2021,21 @@ function ensureJobWizardEmptyStateControlStep(
         entityText.toLowerCase()
     );
 
-  if (
-    entityNavigationIndex < 0
-  ) {
-    return;
-  }
-
+if (
+  entityNavigationIndex < 0
+) {
+  testCase.steps = [
+    {
+      action: "clickText",
+      text: entityText,
+    },
+    {
+      action: "openRuntimeControl",
+      target: controlTarget,
+    },
+    ...steps,
+  ];
+} else {
   testCase.steps = [
     ...steps.slice(
       0,
@@ -1900,6 +2049,7 @@ function ensureJobWizardEmptyStateControlStep(
       entityNavigationIndex + 1
     ),
   ];
+}
 
   console.log(
     ` Job wizard empty-state control ` +
@@ -1978,15 +2128,21 @@ async function prepareAssessmentLanguageModal(
     return;
   }
 
-  if (!browserEditFlowsAllowed()) {
-  console.log(
-    ` Assessment modal opener skipped for ` +
-      `${testCase.id}: browser edit flows ` +
-      `are disabled by default.`
-  );
+  if (
+    hasAssessmentLanguagePersistMutationStep(
+      testCase
+    ) &&
+    !browserEditFlowsAllowed()
+  ) {
+    console.log(
+      ` Assessment modal opener skipped for ` +
+        `${testCase.id}: the case contains a ` +
+        `persistent edit action and browser edit ` +
+        `flows are disabled by default.`
+    );
 
-  return;
-}
+    return;
+  }
 
   console.log(
     ` Assessment modal opener starting for ${testCase.id}`

@@ -38,7 +38,7 @@ ISSUES=(
 mkdir -p "$RUN_DIR" "$RESTORE_DIR"
 
 printf '%s\n' "$RUN_DIR" \
-  > /tmp/latest-final-13-regression-dir.txt
+  > qa-results/latest-final-13-regression-dir.txt
 
 if [[ ! -f "$STATUS_FILE" ]]; then
   printf \
@@ -48,6 +48,8 @@ fi
 
 HAD_PLAN=false
 HAD_REPORT=false
+HAD_EVIDENCE=false
+HAD_VIDEOS=false
 
 if [[ -f qa-results/test-plan.json ]]; then
   cp qa-results/test-plan.json \
@@ -59,6 +61,18 @@ if [[ -f qa-results/report.md ]]; then
   cp qa-results/report.md \
     "$RESTORE_DIR/report.md"
   HAD_REPORT=true
+fi
+
+if [[ -d qa-results/evidence ]]; then
+  cp -R qa-results/evidence \
+    "$RESTORE_DIR/evidence"
+  HAD_EVIDENCE=true
+fi
+
+if [[ -d qa-results/videos ]]; then
+  cp -R qa-results/videos \
+    "$RESTORE_DIR/videos"
+  HAD_VIDEOS=true
 fi
 
 restore_files() {
@@ -76,8 +90,23 @@ restore_files() {
     rm -f qa-results/report.md
   fi
 
+  rm -rf qa-results/evidence
+  rm -rf qa-results/videos
+
+  if [[ "$HAD_EVIDENCE" == "true" ]]; then
+    cp -R "$RESTORE_DIR/evidence" \
+      qa-results/evidence
+  fi
+
+  if [[ "$HAD_VIDEOS" == "true" ]]; then
+    cp -R "$RESTORE_DIR/videos" \
+      qa-results/videos
+  fi
+
+  rm -rf "$RESTORE_DIR"
+
   echo
-  echo "Aktif plan ve rapor geri yüklendi."
+  echo "Aktif plan, rapor ve runtime evidence durumu geri yüklendi."
 }
 
 trap restore_files EXIT
@@ -283,6 +312,8 @@ for ISSUE in "${ISSUES[@]}"; do
 
   rm -f qa-results/test-plan.json
   rm -f qa-results/report.md
+  rm -rf qa-results/evidence
+  rm -rf qa-results/videos
 
   PLAN_STATUS=99
   SMOKE_STATUS=99
@@ -337,6 +368,19 @@ for ISSUE in "${ISSUES[@]}"; do
       2>&1 | tee "$ISSUE_DIR/smoke.log"
 
     SMOKE_STATUS=${PIPESTATUS[0]}
+
+    rm -rf "$ISSUE_DIR/evidence"
+    rm -rf "$ISSUE_DIR/videos"
+
+    if [[ -d qa-results/evidence ]]; then
+      cp -R qa-results/evidence \
+        "$ISSUE_DIR/evidence"
+    fi
+
+    if [[ -d qa-results/videos ]]; then
+      cp -R qa-results/videos \
+        "$ISSUE_DIR/videos"
+    fi
 
     if [[ -f qa-results/report.md ]]; then
       REPORT_PRESENT=true

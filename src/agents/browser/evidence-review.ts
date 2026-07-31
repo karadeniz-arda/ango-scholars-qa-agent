@@ -270,6 +270,12 @@ INCONCLUSIVE:
 The screenshot alone does not contain enough evidence to classify safely.
 
 Rules:
+- Evaluate PASS_CONFIRMED and PRODUCT_BUG only against automatedChecks. If automatedChecks is empty, use successCriteria as the legacy fallback.
+- manualChecks are outside the automated verdict scope. A non-empty manualChecks list must not downgrade an otherwise fully proven automated result.
+- fixtureRequirements are execution prerequisites, not product assertions.
+- When screenshot evidence directly shows that a fixture requirement is missing, empty, unsuitable or incompatible, return TEST_DATA_ISSUE.
+- When fixture satisfaction is not visible or deterministically established, do not assume it was satisfied. Return INCONCLUSIVE instead of PRODUCT_BUG.
+- Do not return AUTOMATION_LIMITATION or INCONCLUSIVE solely because manualChecks remain unverified.
 - Be conservative.
 - Runner notes saying PASS are not proof by themselves.
 - Checkpoint screenshots are visual evidence; their labels only describe when they were captured and are not proof on their own.
@@ -354,10 +360,16 @@ Additional evidence rules:
     const reviewContext = {
       caseId: args.testCase.id,
       goal: args.testCase.goal,
-      successCriteria:
-        args.testCase.successCriteria,
-      expectedSteps:
-        args.testCase.steps ?? [],
+successCriteria:
+  args.testCase.successCriteria,
+automatedChecks:
+  args.testCase.automatedChecks ?? [],
+manualChecks:
+  args.testCase.manualChecks ?? [],
+fixtureRequirements:
+  args.testCase.fixtureRequirements ?? [],
+expectedSteps:
+  args.testCase.steps ?? [],
       currentStatus: args.currentStatus,
       currentReasonCategory:
         args.currentReasonCategory,
@@ -523,7 +535,70 @@ if (
   };
 }
 
-const verdict = parsed.verdict;
+let verdict: EvidenceReviewVerdict =
+  parsed.verdict;
+
+/*
+ * EMPTY_FIXTURE_CONTRADICTION_GUARD_V1
+ *
+ * When a case explicitly requires an empty or zero-data
+ * fixture but the screenshot visibly proves a non-empty
+ * collection, the execution state is incompatible with
+ * the case. This is TEST_DATA_ISSUE, not an automation
+ * failure or product assertion failure.
+ */
+const fixtureScopeText = [
+  JSON.stringify(
+    args.testCase.fixtureRequirements ?? []
+  ),
+  JSON.stringify(
+    args.testCase.automatedChecks ?? []
+  ),
+  String(
+    args.testCase.successCriteria ?? ""
+  ),
+]
+  .join(" ")
+  .toLowerCase();
+
+const visibleStateText = [
+  rationale,
+  ...visibleEvidence,
+]
+  .join(" ")
+  .toLowerCase();
+
+const requiresEmptyOrZeroFixture =
+  fixtureScopeText.includes("zero") ||
+  fixtureScopeText.includes(
+    "empty state"
+  ) ||
+  fixtureScopeText.includes(
+    "empty-state"
+  );
+
+const visiblyShowsNonEmptyCollection =
+  /\b(?:displaying|showing)\s+[1-9]\d*\s+of\s+[1-9]\d*\b/i.test(
+    visibleStateText
+  );
+
+if (
+  (
+    verdict ===
+      "AUTOMATION_LIMITATION" ||
+    verdict === "INCONCLUSIVE"
+  ) &&
+  requiresEmptyOrZeroFixture &&
+  visiblyShowsNonEmptyCollection
+) {
+  verdict = "TEST_DATA_ISSUE";
+
+  console.log(
+    " Evidence fixture contradiction guard: " +
+      "visible non-empty collection conflicts " +
+      "with required empty or zero-data state."
+  );
+}
 
 /*
  * COMPARISON_VALUE_FALSE_PASS_GUARD_V1
@@ -533,7 +608,12 @@ const verdict = parsed.verdict;
  * they cannot confirm CURRENT/PROPOSED value requirements.
  */
 const criteriaText = JSON.stringify(
-  args.testCase.successCriteria ?? ""
+  Array.isArray(
+    args.testCase.automatedChecks
+  ) &&
+    args.testCase.automatedChecks.length > 0
+    ? args.testCase.automatedChecks
+    : args.testCase.successCriteria ?? ""
 ).toLowerCase();
 
 const requiresComparisonValues =

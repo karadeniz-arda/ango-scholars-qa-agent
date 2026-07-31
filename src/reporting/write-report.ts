@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import type { TestPlan } from "../planner/types.js";
 import { buildPolishedReportSections } from "./failure-learning.js";
+import {
+  buildProductFindings,
+  formatProductFindingsMarkdown,
+} from "./product-findings.js";
 
 type EvidenceReviewResult = {
   verdict: string;
@@ -578,7 +582,17 @@ export function writeReport({
   fs.mkdirSync("qa-results", { recursive: true });
 
   const now = new Date().toISOString();
+  const productFindings =
+  buildProductFindings({
+    issueId,
+    plan,
+    browserResults,
+  });
 
+const productFindingsMarkdown =
+  formatProductFindingsMarkdown(
+    productFindings
+  );
   const report = `# QA Agent Report
 
 ## Issue
@@ -597,6 +611,7 @@ ${buildPolishedReportSections({
   apiResults,
   browserResults,
 })}
+${productFindingsMarkdown}
 
 ## Result Summary
 

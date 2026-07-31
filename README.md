@@ -2,11 +2,15 @@
 
 A TypeScript-based QA agent that generates and executes issue-specific API and browser test plans for Ango Scholars.
 
+The latest validated regression results, delivered capabilities, remaining limitations, and next-phase recommendations are documented in [HANDOFF.md](HANDOFF.md).
+
+Packaging, execution, and review guidance for the delivery ZIPs is documented in [DELIVERY.md](DELIVERY.md).
+
 The agent can:
 - Fetch Jira issue context.
 - Fetch related GitHub change context.
 - Generate structured API and browser test plans with an LLM.
-- Resolve executable routes using known route rules and manager API data.
+- Resolve executable routes using known route rules and runtime API data.
 - Run API tests against staging.
 - Run browser tests against staging with Playwright/Stagehand.
 - Capture screenshots and videos as evidence.
@@ -39,33 +43,41 @@ The agent can:
 
 ## Installation
 
-    npm install
+    npm ci
 
 ### Environment Variables
-Create a .env file in the project root. Required values include:
 
-    JIRA_BASE_URL=
-    JIRA_EMAIL=
-    JIRA_API_KEY=
+Copy the environment template before running the agent:
 
-    GITHUB_TOKEN=
-    GITHUB_REPOS=
+```bash
+cp .env.example .env
+```
 
-    FIREBASE_SERVICE_ACCOUNT_KEY=
-    VITE_FIREBASE_API_KEY=
-    VITE_FIREBASE_AUTH_DOMAIN=
-    VITE_FIREBASE_PROJECT_ID=
+Populate `.env` with the values required for the features you intend to run.
 
-    QA_COMPANY_ID=
-    QA_COMPANY_EMAIL=
-    QA_TALENT_EMAIL=
+The supported variable groups include:
 
-    OLLAMA_MODEL=
+- Ollama planning and reasoning configuration
+- Firebase authentication
+- Jira issue access
+- GitHub change-context access
+- QA company and talent personas
+- Screenshot and video evidence review
+- Optional Gemini vision-provider configuration
+- Browser and API mutation safety controls
 
-> **Note:** Do not commit your .env file to version control.
+Not every variable is required for every command. The complete and current
+list of supported variables is maintained in `.env.example`.
+
+> **Note:** Do not commit your `.env` file to version control.
+
+For authenticated staging execution, set `QA_AUTH_MODE=firebase`
+and populate the required Firebase, persona, Jira, GitHub, model-provider,
+and environment values described in `.env.example`. The template defaults
+remain intentionally safe and do not provide working credentials.
 
 ### Configuration
-Staging URLs are configured in config/environments.yaml.
+Staging URLs are configured in `config/environments.yaml`.
 
 Example:
 
@@ -79,6 +91,12 @@ Example:
 ---
 
 ## Usage
+
+> **Important execution model:** `npm run plan` writes the active plan to
+> `qa-results/test-plan.json`. The `run`, `browser`, and `smoke` commands
+> execute that active plan; their `--issue` argument does not regenerate it.
+> Generate or load the matching plan before running an issue. The canonical
+> and multi-issue scripts handle this plan switching automatically.
 
 ### Generate a Test Plan
 Generate a test plan from a Jira issue:
@@ -152,12 +170,11 @@ The current agent supports:
 - Exact fixture policies intentionally block cases when the requested record is unavailable.
 - Deep or scrollable modal content may require scroll-aware, surface-scoped assertions.
 - Complex virtualized dropdowns and controls without accessible metadata may still require additional generic semantic interaction support.
-- Browser and API mutations are disabled by default; canonical mutation cases therefore remain BLOCKED unless an explicitly guarded canary is run.
+- Browser and API mutations are disabled by default. Approved browser mutation workflows may be enabled explicitly when deterministic cleanup is available; API mutations and persistent assessment edits remain guarded.
 - Some network, download, redirect, permission, and backend-side acceptance criteria require dedicated deterministic oracles.
 - LLM wording can vary between fresh plans; reproducibility checks validate structural and safety contracts rather than byte-identical JSON.
 
 ---
-
 
 ## Validation and Reproducibility
 
@@ -165,12 +182,24 @@ Run the canonical 13-issue regression:
 
     QA_REGRESSION_PLAN_MODE=canonical \
     QA_REGRESSION_RESUME=false \
-    QA_ALLOW_BROWSER_MUTATIONS=false \
+    QA_ALLOW_BROWSER_MUTATIONS=true \
     QA_ALLOW_API_MUTATIONS=false \
     QA_BROWSER_MUTATION_PREFLIGHT=false \
-    QA_ALLOW_BROWSER_EDIT_FLOWS=true \
+    QA_ALLOW_BROWSER_EDIT_FLOWS=false \
     QA_EVIDENCE_REVIEW=true \
     bash scripts/run-final-13-regression.sh
+
+This execution profile matches the latest validated canonical run. Within the canonical suite, browser mutations are enabled only for workflows with deterministic cleanup. The default safety values in `.env.example` remain `false`.
+
+### Run a Fresh Multi-Issue Batch
+
+Generate fresh plans and smoke results for an arbitrary list of Jira issues:
+
+```bash
+bash scripts/run-issue-batch.sh AS-1073 AS-1139
+```
+
+Batch artifacts and summaries are written under `qa-results/runs/`.
 
 Check planner structural reproducibility for a Jira issue:
 
@@ -186,5 +215,6 @@ Planner reproducibility checks two fresh plans for schema validity, supported pe
     npm run browser -- --issue AS-1066
     cat qa-results/report.md
 
-## Evaluation Notes
-Additional evaluation notes can be found in qa-results/evaluation-notes.md.
+## Project Handoff
+
+See [HANDOFF.md](HANDOFF.md) for the latest validated canonical regression, delivered reliability capabilities, known limitations, and recommended next phase.

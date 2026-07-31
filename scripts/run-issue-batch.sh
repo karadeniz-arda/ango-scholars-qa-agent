@@ -41,7 +41,7 @@ printf \
 printf "%s\n" "${ISSUES[@]}" \
   > "${BATCH_DIR}/issues.txt"
 
-date -Iseconds \
+date +"%Y-%m-%dT%H:%M:%S%z" \
   > "${BATCH_DIR}/started-at.txt"
 
 git rev-parse HEAD \
@@ -288,7 +288,7 @@ for ISSUE in "${ISSUES[@]}"; do
   echo "  STATUS:          $ISSUE_STATUS"
 done
 
-date -Iseconds \
+date +"%Y-%m-%dT%H:%M:%S%z" \
   > "${BATCH_DIR}/finished-at.txt"
 
 git status --short \

@@ -117,7 +117,7 @@ function getSkillId(
   }
 
   /*
-   * AS-1073 introduces skillIds:number[].
+   * Some skill-selection flows provide skillIds:number[].
    * Do not supply UUIDs or arbitrary text IDs.
    */
   if (!/^\d+$/.test(id)) {

@@ -588,6 +588,30 @@ async function invoiceDrawerMatchesState(
   );
 }
 
+async function waitForInvoiceDrawerOpen(
+  page: Page
+): Promise<boolean> {
+  for (
+    let attempt = 1;
+    attempt <= 8;
+    attempt += 1
+  ) {
+    if (
+      await invoiceDrawerIsVisible(
+        page
+      )
+    ) {
+      return true;
+    }
+
+    if (attempt < 8) {
+      await page.waitForTimeout(300);
+    }
+  }
+
+  return false;
+}
+
 async function waitForInvoiceDrawerClosed(
   page: Page
 ): Promise<boolean> {
@@ -918,19 +942,17 @@ async function clickInvoiceCandidate(
             timeout: 1500,
           });
 
-        await target.click({
-          timeout: 2000,
-        });
+await target.click({
+  timeout: 2000,
+});
 
-        await page.waitForTimeout(700);
-
-        if (
-          await invoiceDrawerIsVisible(
-            page
-          )
-        ) {
-          return true;
-        }
+if (
+  await waitForInvoiceDrawerOpen(
+    page
+  )
+) {
+  return true;
+}
       } catch {
         // Try the next explicit invoice-number target.
       }

@@ -526,21 +526,32 @@ function fingerprint(
       )
       .sort();
 
-  const serialized =
-    JSON.stringify(plan);
+const structuralResources = [
+  ...apiCases.map(
+    (testCase: JsonRecord) =>
+      String(testCase.path ?? "")
+  ),
+  ...browserCases.map(
+    (testCase: JsonRecord) =>
+      String(testCase.startRoute ?? "")
+  ),
+];
 
-  return {
-    api,
-    browser,
-    unknownCount:
-      serialized.match(
-        /\bUNKNOWN\b/g
-      )?.length ?? 0,
-    placeholderCount:
-      serialized.match(
-        /\{[A-Za-z][A-Za-z0-9]*\}/g
-      )?.length ?? 0,
-  };
+const structuralResourceText =
+  structuralResources.join("\n");
+
+return {
+  api,
+  browser,
+  unknownCount:
+    structuralResourceText.match(
+      /\bUNKNOWN\b/gi
+    )?.length ?? 0,
+  placeholderCount:
+    structuralResourceText.match(
+      /\{[A-Za-z][A-Za-z0-9]*\}/g
+    )?.length ?? 0,
+};
 }
 
 function runPlanner(

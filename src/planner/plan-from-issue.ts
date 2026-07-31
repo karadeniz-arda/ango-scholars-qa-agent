@@ -31,6 +31,79 @@ function isUnknownBrowserRoute(route: unknown): boolean {
   return String(route ?? "").trim().toUpperCase() === "UNKNOWN";
 }
 
+function isExplicitBrowserSurfaceRouteCompatible(
+  testCase: any,
+  route: string
+): boolean {
+  const goal = String(
+    testCase?.goal || ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ");
+
+  const pathname =
+    String(route || "")
+      .trim()
+      .split(/[?#]/)[0]
+      ?.replace(/\/+$/, "") || "";
+
+  const segments = pathname
+    .split("/")
+    .filter(Boolean);
+
+  const routeSurface =
+    String(
+      segments[segments.length - 1] || ""
+    )
+      .toLowerCase()
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!goal || !routeSurface) {
+    return true;
+  }
+
+  const routeTargetsAll =
+    routeSurface.startsWith("all ");
+
+  const baseSurface = routeTargetsAll
+    ? routeSurface.slice(4).trim()
+    : routeSurface;
+
+  if (!baseSurface) {
+    return true;
+  }
+
+  const explicitPageTarget =
+    goal.match(
+      new RegExp(
+        `\\b(all\\s+)?` +
+          `${escapeRegularExpression(
+            baseSurface
+          )}\\s+page\\b`,
+        "i"
+      )
+    );
+
+  /*
+   * The goal does not explicitly distinguish
+   * an X page from an All X page.
+   */
+  if (!explicitPageTarget) {
+    return true;
+  }
+
+  const goalTargetsAll =
+    Boolean(explicitPageTarget[1]);
+
+  return (
+    goalTargetsAll === routeTargetsAll
+  );
+}
+
 function mergeResolvedApiPath(
   originalPath: unknown,
   resolvedPath: string
@@ -523,6 +596,423 @@ function hasVerbatimSourceGroundedVisibleText(
   return source.includes(expected);
 }
 
+function normalizePlannerScopeList(
+  value: unknown
+): string[] {
+  const values =
+    Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? [value]
+        : [];
+
+  return [
+    ...new Set(
+      values
+        .map((item) =>
+          String(item ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+        )
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function splitPlannerCriteria(
+  value: unknown
+): string[] {
+  const text =
+    Array.isArray(value)
+      ? value.join("\n")
+      : String(value ?? "");
+
+  return text
+    .split(
+      /(?:\r?\n)+|(?<=[.!?])\s+/
+    )
+    .map((item) =>
+      item.replace(/\s+/g, " ").trim()
+    )
+    .filter(Boolean);
+}
+
+function buildAutomatedCheckFromStep(
+  step: any
+): string | null {
+  const action = String(
+    step?.action || ""
+  );
+
+  const text = String(
+    step?.text ||
+      step?.target ||
+      ""
+  ).trim();
+
+  if (
+    action === "assertTextVisible" &&
+    text
+  ) {
+    return `Verify "${text}" is visible.`;
+  }
+
+  if (
+    action === "assertTextNotVisible" &&
+    text
+  ) {
+    return `Verify "${text}" is not visible.`;
+  }
+
+  if (
+    action === "assertUrlContains" &&
+    text
+  ) {
+    return `Verify the URL contains "${text}".`;
+  }
+
+  if (
+    action === "assertUrlNotContains" &&
+    text
+  ) {
+    return `Verify the URL does not contain "${text}".`;
+  }
+
+  if (
+    action === "openRuntimeControl" &&
+    text
+  ) {
+    return `Verify the runtime control "${text}" opens.`;
+  }
+
+  if (
+    action ===
+    "createDraftJobAndVerifyRedirect"
+  ) {
+    return (
+      "Verify the QA-owned draft job is created, " +
+      "redirected to its concrete details route, " +
+      "and cleaned up exactly."
+    );
+  }
+
+  return null;
+}
+
+/*
+ * PLANNER_URL_SYNC_STEP_NORMALIZER_V1
+ *
+ * Canonicalize the safe browser flow that verifies one
+ * runtime tab and one runtime filter through URL query keys.
+ *
+ * This prevents harmless LLM variation such as reloading
+ * once per query key versus reloading once after both
+ * interactions from creating structural planner drift.
+ *
+ * Cases containing any additional action are left unchanged.
+ */
+function normalizePlannerUrlSynchronizationSteps(
+  plan: any
+): any {
+  const browserCases =
+    Array.isArray(plan?.browserCases)
+      ? plan.browserCases
+      : [];
+
+  const allowedActions =
+    new Set([
+      "selectRuntimeTopTab",
+      "assertUrlContains",
+      "openMenu",
+      "selectRuntimeFilterOption",
+      "reload",
+    ]);
+
+  let normalizedCases = 0;
+
+  for (const browserCase of browserCases) {
+    const steps =
+      Array.isArray(browserCase?.steps)
+        ? browserCase.steps
+        : [];
+
+    if (
+      steps.length === 0 ||
+      steps.some(
+        (step: any) =>
+          !allowedActions.has(
+            String(step?.action || "")
+          )
+      )
+    ) {
+      continue;
+    }
+
+    const tabSteps =
+      steps.filter(
+        (step: any) =>
+          step?.action ===
+          "selectRuntimeTopTab"
+      );
+
+    const menuSteps =
+      steps.filter(
+        (step: any) =>
+          step?.action === "openMenu"
+      );
+
+    const filterSteps =
+      steps.filter(
+        (step: any) =>
+          step?.action ===
+          "selectRuntimeFilterOption"
+      );
+
+    const reloadSteps =
+      steps.filter(
+        (step: any) =>
+          step?.action === "reload"
+      );
+
+    if (
+      tabSteps.length !== 1 ||
+      menuSteps.length !== 1 ||
+      filterSteps.length !== 1 ||
+      reloadSteps.length < 1
+    ) {
+      continue;
+    }
+
+    const filterStep =
+      filterSteps[0];
+
+    const queryKey =
+      String(
+        filterStep?.queryKey || ""
+      ).trim();
+
+    if (!queryKey) {
+      continue;
+    }
+
+    const expectedFilterAssertion =
+      `${queryKey}=`;
+
+    const urlAssertions =
+      steps.filter(
+        (step: any) =>
+          step?.action ===
+          "assertUrlContains"
+      );
+
+    const hasTabAssertion =
+      urlAssertions.some(
+        (step: any) =>
+          String(step?.text || "")
+            .trim() === "tab="
+      );
+
+    const hasFilterAssertion =
+      urlAssertions.some(
+        (step: any) =>
+          String(step?.text || "")
+            .trim() ===
+          expectedFilterAssertion
+      );
+
+    const containsOnlyCanonicalAssertions =
+      urlAssertions.every(
+        (step: any) => {
+          const expected =
+            String(step?.text || "")
+              .trim();
+
+          return (
+            expected === "tab=" ||
+            expected ===
+              expectedFilterAssertion
+          );
+        }
+      );
+
+    if (
+      !hasTabAssertion ||
+      !hasFilterAssertion ||
+      !containsOnlyCanonicalAssertions
+    ) {
+      continue;
+    }
+
+    browserCase.steps = [
+      {
+        ...tabSteps[0],
+      },
+      {
+        action: "assertUrlContains",
+        text: "tab=",
+      },
+      {
+        ...menuSteps[0],
+      },
+      {
+        ...filterStep,
+        queryKey,
+      },
+      {
+        action: "assertUrlContains",
+        text: expectedFilterAssertion,
+      },
+      {
+        action: "reload",
+      },
+      {
+        action: "assertUrlContains",
+        text: "tab=",
+      },
+      {
+        action: "assertUrlContains",
+        text: expectedFilterAssertion,
+      },
+    ];
+
+    normalizedCases += 1;
+  }
+
+  if (normalizedCases > 0) {
+    console.log(
+      ` Planner URL synchronization normalization: ` +
+        `${normalizedCases} browser case(s) normalized.`
+    );
+  }
+
+  return plan;
+}
+
+/*
+ * PLANNER_VERDICT_SCOPE_NORMALIZER_V1
+ *
+ * Keep automatically verifiable behavior separate from
+ * manual coverage and runtime fixture prerequisites.
+ */
+function normalizePlannerBrowserScopes(
+  plan: any
+): any {
+  const browserCases =
+    Array.isArray(plan?.browserCases)
+      ? plan.browserCases
+      : [];
+
+  const manualPattern =
+    /\b(?:manual|manually|human|checked separately|verify separately|external verification|unsupported interaction|unavailable deterministic oracle)\b/i;
+
+  const fixturePattern =
+    /\b(?:fixture|prerequisite|test data|runtime data|lifecycle state|ownership|permission combination|exact permission|route (?:is )?not supplied|record (?:is )?(?:unavailable|missing))\b/i;
+
+  for (const browserCase of browserCases) {
+    const criteria =
+      splitPlannerCriteria(
+        browserCase?.successCriteria
+      );
+
+    const plannerAutomatedChecks =
+  normalizePlannerScopeList(
+    browserCase?.automatedChecks
+  );
+
+    const manualChecks =
+      normalizePlannerScopeList(
+        browserCase?.manualChecks
+      );
+
+    const fixtureRequirements =
+      normalizePlannerScopeList(
+        browserCase?.fixtureRequirements
+      );
+
+    const retainedCriteria: string[] = [];
+
+    for (const criterion of criteria) {
+      const isManual =
+        manualPattern.test(criterion);
+
+      const isFixture =
+        fixturePattern.test(criterion);
+
+      if (isManual) {
+        manualChecks.push(criterion);
+      }
+
+      if (isFixture) {
+        fixtureRequirements.push(
+          criterion
+        );
+      }
+
+      if (!isManual && !isFixture) {
+        retainedCriteria.push(
+          criterion
+        );
+      }
+    }
+
+    const steps =
+      Array.isArray(browserCase?.steps)
+        ? browserCase.steps
+        : [];
+
+const derivedAutomatedChecks =
+  normalizePlannerScopeList(
+    steps
+      .map((step: any) =>
+        buildAutomatedCheckFromStep(step)
+      )
+      .filter(Boolean)
+  );
+
+const automatedChecks =
+  derivedAutomatedChecks.length > 0
+    ? derivedAutomatedChecks
+    : plannerAutomatedChecks.length > 0
+      ? plannerAutomatedChecks
+      : retainedCriteria;
+
+    browserCase.automatedChecks =
+      normalizePlannerScopeList(
+        automatedChecks
+      );
+
+    browserCase.manualChecks =
+      normalizePlannerScopeList(
+        manualChecks
+      );
+
+    browserCase.fixtureRequirements =
+      normalizePlannerScopeList(
+        fixtureRequirements
+      );
+
+    if (retainedCriteria.length > 0) {
+      browserCase.successCriteria =
+        retainedCriteria.join(" ");
+    } else if (
+      browserCase.automatedChecks.length > 0
+    ) {
+      browserCase.successCriteria =
+        browserCase.automatedChecks.join(
+          " "
+        );
+    } else {
+      browserCase.successCriteria =
+        String(
+          browserCase?.goal ||
+            "Verify the scoped product behavior."
+        ).trim();
+    }
+  }
+
+  return plan;
+}
+
 /*
  * MULTIWORD_UI_ASSERTION_PROVENANCE_GATE_V1
  *
@@ -917,6 +1407,15 @@ function enrichTestPlanWithDiscovery(plan: any): any {
         return false;
       }
 
+      if (
+  !isExplicitBrowserSurfaceRouteCompatible(
+    browserCase,
+    item.route
+  )
+) {
+  return false;
+}
+
       /**
        * A generic list/landing page is not enough for
        * job details, comparison, modal, or review cases.
@@ -1088,6 +1587,7 @@ function getBrowserCaseFingerprint(
     normalizePlannerFingerprintText(
       testCase?.startRoute
     ),
+
     getBrowserStepsFingerprint(
       testCase
     ),
@@ -2211,18 +2711,18 @@ Important context:
 - Every concrete fixture value must be grounded in the supplied Jira ticket or GitHub change context. This includes numeric IDs, UUIDs, project names, skill names, talent names, job names, invoice numbers, emails, labels, record titles, and query-parameter values.
 - Before using a concrete fixture value in an API path, query string, request body, browser click step, browser assertion, goal, or success criterion, verify that the exact value appears in the supplied context.
 - Never create illustrative fixture values such as fake record names, sample IDs, alphabetic example names, or convenient project/skill labels. Examples shown in these instructions describe JSON shape only and are never test data.
-- When the required fixture value is not supplied, do not guess it. Keep the route or endpoint unresolved where necessary, describe the required fixture in notes or successCriteria, and generate a case that will honestly become BLOCKED or MANUAL_REQUIRED rather than FAIL.
+- When the required fixture value is not supplied, do not guess it. Keep the route or endpoint unresolved where necessary, describe the missing runtime data, lifecycle state, ownership, or permission prerequisite in fixtureRequirements, and generate a case that will honestly become BLOCKED rather than FAIL.
 - Do not click or assert record-specific browser text unless that exact record text is grounded in the supplied context. Stable product UI labels, headings, buttons, tabs, fields, and acceptance-criterion copy may still be asserted when they are supported by Jira or GitHub evidence.
-- For assertTextVisible, copy multi-word UI text verbatim from Jira or GitHub evidence. Do not transform a semantic requirement into a guessed title-cased field, column, heading, button, status, or indicator label. When no exact visible label is supplied, omit that exact assertion and describe the unsupported portion as MANUAL_REQUIRED.
+- For assertTextVisible, copy multi-word UI text verbatim from Jira or GitHub evidence. Do not transform a semantic requirement into a guessed title-cased field, column, heading, button, status, or indicator label. When no exact visible label is supplied, omit that exact assertion and place the unsupported human-verification requirement in manualChecks.
 - Do not place ungrounded numeric or named values into query parameters. When a query behavior requires unavailable fixture IDs, document the fixture requirement instead of inventing executable values.
 - The dedicated createDraftJobAndVerifyRedirect action is allowed to generate its own unique QA-owned job title at runtime. Do not put that generated title or any invented record value into the plan.
 - PLANNER_FIXTURE_POLICY_V1: Every browserCase must include runtimeFixturePolicy with either "exact" or "compatible-state".
 - Use "exact" when the concrete record identity itself is required by the Jira summary, description, or acceptance criteria. Under exact policy the runner must not replace the requested entity with another runtime record.
 - Use "compatible-state" when a concrete record appears in GitHub tests, seed data, mocks, fixtures, examples, or implementation context but Jira requires the behavior or state rather than that exact record identity.
 - For invoice drawer cases, compatible-state is also allowed without a planner invoice number when Jira or GitHub grounds the required invoice state and the specialized runtime resolver can safely select and verify a real invoice. Do not invent a concrete invoice value.
-- A compatible-state candidate remains only a grounded resolver hint. The goal and successCriteria must describe opening a compatible runtime record in the required state and must not claim that the candidate identity itself was opened.
+- A compatible-state candidate remains only a grounded resolver hint. The goal, successCriteria, and automatedChecks must describe opening a compatible runtime record in the required state and must not claim that the candidate identity itself was opened.
 - Never use compatible-state as permission for arbitrary substitution. It is valid only when a specialized runner-owned resolver verifies the required route, table view, entity type, state, and selected runtime identity.
-- When exactness is unclear, use "exact". Missing fixture data must become BLOCKED or MANUAL_REQUIRED rather than a false PASS.
+- When exactness is unclear, use "exact". Missing or incompatible fixture data must become BLOCKED with TEST_DATA_ISSUE classification rather than FAIL or MANUAL_REQUIRED.
 
 General rules:
 1. Include API cases and browser cases if relevant.
@@ -2243,8 +2743,16 @@ General rules:
 15. Never output standalone string values inside objects. Every object field must be a valid "key": value pair.
 16. Do not output duplicate malformed fields such as "company_admin", before "persona".
 17. Every apiCase object must contain exactly these top-level fields: id, persona, method, path, body, expect.
-18. Every browserCase object must contain exactly these top-level fields: id, persona, goal, startRoute, successCriteria, runtimeFixturePolicy, steps.
+18. Every browserCase object must contain exactly these top-level fields: id, persona, goal, startRoute, successCriteria, runtimeFixturePolicy, automatedChecks, manualChecks, fixtureRequirements, steps.
 19. Decompose the Jira acceptance criteria into distinct testable behaviors before generating cases. Every major acceptance criterion must be covered by at least one API or browser case when relevant. If acceptance criteria are empty, use only the Jira summary and description to establish scope; use the GitHub diff only to discover the implementation details of that scoped behavior.
+19a. Every browserCase must separate verdict scope into three arrays:
+    - automatedChecks: acceptance criteria that the supported runner steps and captured evidence can verify automatically.
+    - manualChecks: acceptance criteria that require human judgment, unsupported interaction, external verification, or an unavailable deterministic oracle.
+    - fixtureRequirements: runtime records, lifecycle states, ownership conditions, data shapes, or permission combinations required before execution.
+19b. successCriteria must be a concise description of the expected product behavior. Do not put phrases such as route not supplied, prerequisite not supplied, must be checked manually, requires a specific fixture, or checked separately into successCriteria.
+19c. A non-empty manualChecks array must not by itself downgrade an otherwise valid automated PASS. Manual checks remain separately reported coverage.
+19d. Missing or incompatible fixtureRequirements must produce BLOCKED or TEST_DATA_ISSUE behavior, not an ordinary product FAIL.
+19e. automatedChecks must correspond to supported deterministic steps, visible source-grounded UI evidence, URL assertions, or another available automated oracle. Do not claim automated coverage for a criterion that the generated steps cannot verify.
 20. The test-case budget is strict:
    - Generate at most 4 apiCases.
    - Generate at most 4 browserCases.
@@ -2354,10 +2862,10 @@ Browser step requirements:
 - For origin "jobs", use startRoute "/company/jobs/create" and assert "/company/jobs/" plus "project=" after the dedicated action.
 - For origin "all-jobs", use startRoute "/company/jobs/create?origin=all-jobs" and assert "/company/all-jobs/" plus "project=" after the dedicated action.
 - In both cases, assert that "jobId=", "undefined", and "null" are absent when those malformed URL risks are within the Jira scope.
-- When a state-changing action is otherwise prohibited, verify only the pre-action controls and explain the limitation in successCriteria.
+- When a state-changing action is otherwise prohibited, verify only the safe pre-action controls in automatedChecks and place the unsupported state-changing coverage in manualChecks. Do not put that limitation in successCriteria.
+- If startRoute is "UNKNOWN", include only steps that clearly belong to the intended product area and document the missing route or fixture in fixtureRequirements. Keep goal and successCriteria limited to the expected product behavior.
 - Do not combine mutually exclusive fixture states such as pending, rejected, approved, empty, and no-file completion in one browserCase.
 - Do not generate permission-specific browser cases unless the available persona can actually represent the required permission set. Put unsupported permission coverage in the overall notes instead of creating a false-pass-prone browser case.
-- If startRoute is "UNKNOWN", include only steps that clearly belong to the intended product area and state the required route or fixture in the goal or successCriteria.
 - Each case must cover a distinct acceptance criterion or high-risk behavior. Do not create duplicate cases that differ only by wording or trivial data permutations.
 - Prefer a concise but complete plan. Cover every distinct acceptance criterion and high-risk state without duplicate or trivial cases.
 - Do not invent CSS selectors, XPath, Playwright code, or unsupported action names.
@@ -2391,6 +2899,11 @@ The JSON structure MUST match exactly this:
       "startRoute": "UNKNOWN",
       "successCriteria": "what should be true",
       "runtimeFixturePolicy": "exact",
+      "automatedChecks": [
+        "behavior verified by supported runner steps"
+      ],
+      "manualChecks": [],
+      "fixtureRequirements": [],
       "steps": [
         { "action": "assertTextVisible", "text": "expected text" },
         { "action": "assertTextNotVisible", "text": "undefined" },
@@ -2438,12 +2951,16 @@ The JSON structure MUST match exactly this:
       applyBrowserUrlAssertionPrerequisiteGate(
         applyPlannerCaseLimits(
           enrichTestPlanWithDiscovery(
-            applyPlannerRuntimeFixturePolicies(
-              splitCombinedInvoiceStateCases(
-                parsedPlan
-              ),
-              fileContents
-            )
+normalizePlannerBrowserScopes(
+  normalizePlannerUrlSynchronizationSteps(
+    applyPlannerRuntimeFixturePolicies(
+      splitCombinedInvoiceStateCases(
+        parsedPlan
+      ),
+      fileContents
+    )
+  )
+)
           )
         ),
         fileContents

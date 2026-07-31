@@ -61,6 +61,24 @@ export type BrowserTestCase = {
     | "exact"
     | "compatible-state";
 
+  /**
+   * Acceptance criteria that the runner and evidence reviewer
+   * can verify automatically.
+   */
+  automatedChecks?: string[];
+
+  /**
+   * Acceptance criteria that require human verification and
+   * must not downgrade an otherwise valid automated result.
+   */
+  manualChecks?: string[];
+
+  /**
+   * Runtime records, lifecycle states, or permission fixtures
+   * required before the case can execute.
+   */
+  fixtureRequirements?: string[];
+
   steps?: BrowserStep[];
 };
 
