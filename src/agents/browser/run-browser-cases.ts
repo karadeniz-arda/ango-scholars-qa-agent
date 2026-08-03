@@ -823,9 +823,12 @@ ensureJobWizardEmptyStateControlStep(
 
     const fixtureBlockDeferred =
       Boolean(blockReason) &&
-      shouldDeferBrowserFixtureBlock(
-        testCase
-      );
+      shouldDeferBrowserFixtureBlock({
+        issueKey: String(
+          plan.issueKey || ""
+        ),
+        testCase,
+      });
 
     if (
       blockReason &&
@@ -1078,6 +1081,9 @@ if (signedInPersona !== persona) {
 
       const fixturePreparation =
         await prepareBrowserFixture({
+          issueKey: String(
+            plan.issueKey || ""
+          ),
           page,
           testCase,
           persona,

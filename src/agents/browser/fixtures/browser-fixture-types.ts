@@ -33,18 +33,23 @@ export type BrowserFixtureCleanupRegistration = (
   cleanup: DeferredCleanup
 ) => void;
 
-export type BrowserFixtureProviderContext = {
-  page: Page;
+export type BrowserFixtureMatchContext = {
+  issueKey: string;
   testCase: any;
-  persona: BrowserPersona;
-  baseUrl: string;
-  runtimeResourceContext?:
-    RuntimeResourceContext;
-  captureCheckpoint?:
-    BrowserFixtureCheckpointCapture;
-  registerCleanup?:
-    BrowserFixtureCleanupRegistration;
 };
+
+export type BrowserFixtureProviderContext =
+  BrowserFixtureMatchContext & {
+    page: Page;
+    persona: BrowserPersona;
+    baseUrl: string;
+    runtimeResourceContext?:
+      RuntimeResourceContext;
+    captureCheckpoint?:
+      BrowserFixtureCheckpointCapture;
+    registerCleanup?:
+      BrowserFixtureCleanupRegistration;
+  };
 
 export type BrowserFixtureReadyResult = {
   status: "READY";
@@ -88,7 +93,7 @@ export type BrowserFixtureProvider = {
   id: string;
 
   supports: (
-    testCase: any
+    context: BrowserFixtureMatchContext
   ) => boolean;
 
   prepare: (

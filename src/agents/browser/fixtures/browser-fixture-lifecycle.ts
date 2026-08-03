@@ -6,6 +6,7 @@ import {
   listBrowserFixtureProviders,
 } from "./browser-fixture-registry.js";
 import type {
+  BrowserFixtureMatchContext,
   BrowserFixturePreparationResult,
   BrowserFixtureProvider,
   BrowserFixtureProviderContext,
@@ -23,21 +24,21 @@ BrowserFixturePreparationResult {
 }
 
 export function hasBrowserFixtureProvider(
-  testCase: any,
+  context: BrowserFixtureMatchContext,
   providers:
     BrowserFixtureProvider[] =
       listBrowserFixtureProviders()
 ): boolean {
   return (
     findBrowserFixtureProvider(
-      testCase,
+      context,
       providers
     ) !== null
   );
 }
 
 export function shouldDeferBrowserFixtureBlock(
-  testCase: any,
+  context: BrowserFixtureMatchContext,
   providers:
     BrowserFixtureProvider[] =
       listBrowserFixtureProviders()
@@ -45,7 +46,7 @@ export function shouldDeferBrowserFixtureBlock(
   return (
     browserFixtureProvisioningAllowed() &&
     hasBrowserFixtureProvider(
-      testCase,
+      context,
       providers
     )
   );
@@ -65,7 +66,7 @@ export async function prepareBrowserFixture(
 
   const provider =
     findBrowserFixtureProvider(
-      context.testCase,
+      context,
       providers
     );
 

@@ -1,4 +1,5 @@
 import type {
+  BrowserFixtureMatchContext,
   BrowserFixtureProvider,
 } from "./browser-fixture-types.js";
 
@@ -19,7 +20,7 @@ BrowserFixtureProvider[] {
 }
 
 export function findBrowserFixtureProvider(
-  testCase: any,
+  context: BrowserFixtureMatchContext,
   providers:
     BrowserFixtureProvider[] =
       listBrowserFixtureProviders()
@@ -29,7 +30,7 @@ export function findBrowserFixtureProvider(
 
     try {
       supported =
-        provider.supports(testCase);
+        provider.supports(context);
     } catch {
       supported = false;
     }
