@@ -41,8 +41,16 @@ export function isPermissionSensitiveBrowserCase(
       )
       .filter(
         (sentence) =>
-          !/\bmanual(?:_required|\s+required)\b/i.test(
-            sentence
+          ![
+            /\bmanual(?:_required|\s+required)\b/i,
+            /\bmanual\s+follow[- ]?up\b/i,
+            /\bmanual\s+verification\b/i,
+            /\bmanual\s+coverage\b/i,
+            /\bchecked separately\b/i,
+            /\bmust be checked separately\b/i,
+            /\brequires?\s+manual\b/i,
+          ].some((pattern) =>
+            pattern.test(sentence)
           )
       )
       .join(" ");
