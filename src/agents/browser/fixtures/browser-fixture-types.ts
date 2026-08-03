@@ -42,7 +42,6 @@ export type BrowserFixtureProviderContext = {
 
 export type BrowserFixtureReadyResult = {
   status: "READY";
-  providerId: string;
   notes: string[];
   deterministicEvidence:
     BrowserDeterministicEvidence[];
@@ -51,7 +50,6 @@ export type BrowserFixtureReadyResult = {
 
 export type BrowserFixtureFailureResult = {
   status: "BLOCKED" | "ERROR";
-  providerId: string;
   reasonCategory: string;
   notes: string[];
   deterministicEvidence:
@@ -63,6 +61,11 @@ export type BrowserFixtureProviderResult =
   | BrowserFixtureReadyResult
   | BrowserFixtureFailureResult;
 
+export type BrowserFixtureResolvedResult =
+  BrowserFixtureProviderResult & {
+    providerId: string;
+  };
+
 export type BrowserFixtureNotApplicableResult = {
   status: "NOT_APPLICABLE";
   providerId: null;
@@ -73,7 +76,7 @@ export type BrowserFixtureNotApplicableResult = {
 
 export type BrowserFixturePreparationResult =
   | BrowserFixtureNotApplicableResult
-  | BrowserFixtureProviderResult;
+  | BrowserFixtureResolvedResult;
 
 export type BrowserFixtureProvider = {
   id: string;

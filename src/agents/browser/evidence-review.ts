@@ -56,6 +56,8 @@ export type BrowserDeterministicEvidence = {
     | "assertTextVisible"
     | "assertTextNotVisible"
     | "openRuntimeControl"
+    | "provisionBrowserFixture"
+    | "cleanupBrowserFixture"
     | "resolveRuntimeInvoiceFixture"
     | "cleanupExactCreatedJob";
   expected: string;
