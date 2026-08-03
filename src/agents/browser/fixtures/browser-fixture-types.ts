@@ -92,6 +92,10 @@ export type BrowserFixturePreparationResult =
 export type BrowserFixtureProvider = {
   id: string;
 
+  getEntryRoute?: (
+    context: BrowserFixtureMatchContext
+  ) => string | null;
+
   supports: (
     context: BrowserFixtureMatchContext
   ) => boolean;

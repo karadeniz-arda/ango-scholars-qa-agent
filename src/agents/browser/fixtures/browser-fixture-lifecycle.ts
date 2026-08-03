@@ -23,6 +23,28 @@ BrowserFixturePreparationResult {
   };
 }
 
+function normalizeBrowserFixtureEntryRoute(
+  value: unknown
+): string | null {
+  const route =
+    String(value || "").trim();
+
+  if (
+    !route ||
+    !route.startsWith("/") ||
+    route.startsWith("//") ||
+    /\s/.test(route) ||
+    route.includes("://") ||
+    route.toUpperCase().startsWith(
+      "UNKNOWN"
+    )
+  ) {
+    return null;
+  }
+
+  return route;
+}
+
 export function hasBrowserFixtureProvider(
   context: BrowserFixtureMatchContext,
   providers:
@@ -37,7 +59,40 @@ export function hasBrowserFixtureProvider(
   );
 }
 
-export function shouldDeferBrowserFixtureBlock(
+export function resolveBrowserFixtureEntryRoute(
+  context: BrowserFixtureMatchContext,
+  providers:
+    BrowserFixtureProvider[] =
+      listBrowserFixtureProviders()
+): string | null {
+  if (
+    !browserFixtureProvisioningAllowed()
+  ) {
+    return null;
+  }
+
+  const provider =
+    findBrowserFixtureProvider(
+      context,
+      providers
+    );
+
+  if (!provider?.getEntryRoute) {
+    return null;
+  }
+
+  try {
+    return normalizeBrowserFixtureEntryRoute(
+      provider.getEntryRoute(
+        context
+      )
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function shouldPrepareBrowserFixture(
   context: BrowserFixtureMatchContext,
   providers:
     BrowserFixtureProvider[] =
@@ -49,6 +104,18 @@ export function shouldDeferBrowserFixtureBlock(
       context,
       providers
     )
+  );
+}
+
+export function shouldDeferBrowserFixtureBlock(
+  context: BrowserFixtureMatchContext,
+  providers:
+    BrowserFixtureProvider[] =
+      listBrowserFixtureProviders()
+): boolean {
+  return shouldPrepareBrowserFixture(
+    context,
+    providers
   );
 }
 

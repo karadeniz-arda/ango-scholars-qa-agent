@@ -1,3 +1,6 @@
+import {
+  talentProfileLanguageFixtureProvider,
+} from "./talent-profile-language-fixture.js";
 import type {
   BrowserFixtureMatchContext,
   BrowserFixtureProvider,
@@ -10,7 +13,9 @@ import type {
  * output from enabling an unknown mutation capability.
  */
 const browserFixtureProviders:
-  BrowserFixtureProvider[] = [];
+  BrowserFixtureProvider[] = [
+    talentProfileLanguageFixtureProvider,
+  ];
 
 export function listBrowserFixtureProviders():
 BrowserFixtureProvider[] {

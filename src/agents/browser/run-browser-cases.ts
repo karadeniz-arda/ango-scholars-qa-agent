@@ -66,7 +66,8 @@ import {
 } from "./browser-deferred-cleanup.js";
 import {
   prepareBrowserFixture,
-  shouldDeferBrowserFixtureBlock,
+  shouldPrepareBrowserFixture,
+  resolveBrowserFixtureEntryRoute,
 } from "./fixtures/browser-fixture-lifecycle.js";
 
 
@@ -800,35 +801,142 @@ const candidates =
 for (const testCase of executionCases) {
   console.log(`\nTaking photo: [${testCase.id}] - ${testCase.goal}`);
 
+  const fixtureMatchContext = {
+    issueKey: String(
+      plan.issueKey || ""
+    ),
+    testCase,
+  };
+
+  const fixturePreparationPlanned =
+    shouldPrepareBrowserFixture(
+      fixtureMatchContext
+    );
+
+  const plannedStartRoute =
+    String(
+      testCase.startRoute || ""
+    ).trim();
+
+  const plannedStartRouteReady =
+    plannedStartRoute.startsWith("/") &&
+    !plannedStartRoute.startsWith("//") &&
+    !plannedStartRoute
+      .toUpperCase()
+      .startsWith("UNKNOWN");
+
+  const fixtureEntryRoute =
+    fixturePreparationPlanned &&
+    !plannedStartRouteReady
+      ? resolveBrowserFixtureEntryRoute(
+          fixtureMatchContext
+        )
+      : null;
+
+  if (fixtureEntryRoute) {
+    testCase.startRoute =
+      fixtureEntryRoute;
+
+    console.log(
+      ` Browser fixture entry route selected ` +
+        `for ${testCase.id}: ` +
+        `${fixtureEntryRoute}`
+    );
+  }
+
+  const executionStartRoute =
+    String(
+      testCase.startRoute || ""
+    ).trim();
+
+  const executionRouteReady =
+    executionStartRoute.startsWith("/") &&
+    !executionStartRoute.startsWith("//") &&
+    !executionStartRoute
+      .toUpperCase()
+      .startsWith("UNKNOWN");
+
   ensureAssessmentLanguageReadOnlyNavigationStep(
-  testCase
-);
+    testCase
+  );
 
-ensureTalentProfileLanguageNavigationStep(
-  testCase
-);
+  if (!fixturePreparationPlanned) {
+    ensureTalentProfileLanguageNavigationStep(
+      testCase
+    );
+  } else {
+    console.log(
+      ` Browser fixture provider owns ` +
+        `the talent-language surface ` +
+        `preparation for ${testCase.id}.`
+    );
+  }
 
-ensureAssessmentLanguageEditorNavigationStep(
-  testCase
-);
+  ensureAssessmentLanguageEditorNavigationStep(
+    testCase
+  );
 
-ensureJobWizardEmptyStateControlStep(
-  testCase
-);
+  ensureJobWizardEmptyStateControlStep(
+    testCase
+  );
 
   const successSignal =
     buildSuccessSignal(testCase);
-    const blockReason =
-      getBrowserBlockReason(testCase);
 
-    const fixtureBlockDeferred =
-      Boolean(blockReason) &&
-      shouldDeferBrowserFixtureBlock({
-        issueKey: String(
-          plan.issueKey || ""
-        ),
-        testCase,
-      });
+  const blockReason =
+    getBrowserBlockReason(testCase);
+
+  const fixtureBlockDeferred =
+    Boolean(blockReason) &&
+    fixturePreparationPlanned &&
+    executionRouteReady;
+
+  if (
+    !blockReason &&
+    !executionRouteReady
+  ) {
+    const routeReason =
+      "No concrete browser route or registered " +
+      "fixture-provider entry route was available.";
+
+    results.push({
+      id: testCase.id,
+      status: "BLOCKED",
+      reasonCategory:
+        "MISSING_BROWSER_ROUTE",
+      startRoute: testCase.startRoute,
+      evidence: [
+        routeReason,
+        `Success signal: ${successSignal}`,
+        "Success signal reached: false",
+      ].join(" | "),
+      successSignal,
+      successSignalReached: false,
+      evidenceSummary: {
+        successSignal,
+        successSignalReached: false,
+        authWallDetected: false,
+        pagesVisited: [],
+        keyVisibleTexts: [],
+      },
+      trace: [
+        {
+          index: 1,
+          action:
+            "fixture-entry-route",
+          status: "BLOCKED",
+          note: routeReason,
+        },
+      ],
+    });
+
+    console.log(
+      ` Result: BLOCKED (` +
+        `${routeReason})`
+    );
+
+    continue;
+  }
 
     if (
       blockReason &&
@@ -908,7 +1016,7 @@ if (signedInPersona !== persona) {
 }
 
       const targetUrl =
-        `${baseUrl}${testCase.startRoute}`;
+        `${baseUrl}${executionStartRoute}`;
 
       let authenticatedRouteReached =
         false;

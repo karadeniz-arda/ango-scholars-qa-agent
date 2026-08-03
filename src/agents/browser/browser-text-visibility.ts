@@ -6,9 +6,17 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export type BrowserTextVisibilityOptions = {
+  exact?: boolean;
+  scopeSelector?: string;
+  allowRequiredAsterisk?: boolean;
+};
+
 export async function isBrowserTextVisible(
   page: Page,
-  text: string
+  text: string,
+  options:
+    BrowserTextVisibilityOptions = {}
 ): Promise<boolean> {
   const normalized =
     String(text || "").trim();
@@ -17,41 +25,63 @@ export async function isBrowserTextVisible(
     return false;
   }
 
-  const regex = new RegExp(
+  const escapedText =
     escapeRegExp(normalized)
-      .replace(/\\\s+/g, "\\s+"),
+      .replace(/\\\s+/g, "\\s+");
+
+  const regexSource =
+    options.exact
+      ? [
+          "^\\s*",
+          escapedText,
+          options.allowRequiredAsterisk
+            ? "\\s*\\*?"
+            : "",
+          "\\s*$",
+        ].join("")
+      : escapedText;
+
+  const regex = new RegExp(
+    regexSource,
     "i"
   );
 
   /*
-   * Search the active drawer/dialog first. A hidden duplicate
-   * elsewhere in the DOM must not make a visible assertion
-   * fail merely because it is the locator's first match.
+   * A component-specific scope can be supplied for labels
+   * rendered inside an active popover. Otherwise retain the
+   * existing broad visibility search behavior.
    */
-  const scopes = [
-    page.getByRole("dialog"),
+  const scopes =
+    options.scopeSelector
+      ? [
+          page.locator(
+            `${options.scopeSelector}:visible`
+          ),
+        ]
+      : [
+          page.getByRole("dialog"),
 
-    page.locator(
-      '[data-radix-dialog-content]'
-    ),
+          page.locator(
+            '[data-radix-dialog-content]'
+          ),
 
-    page.locator(
-      '[data-state="open"]'
-    ),
+          page.locator(
+            '[data-state="open"]'
+          ),
 
-    page.locator(
-      [
-        '[class*="drawer"]',
-        '[class*="Drawer"]',
-        '[class*="sheet"]',
-        '[class*="Sheet"]',
-      ].join(", ")
-    ),
+          page.locator(
+            [
+              '[class*="drawer"]',
+              '[class*="Drawer"]',
+              '[class*="sheet"]',
+              '[class*="Sheet"]',
+            ].join(", ")
+          ),
 
-    page.locator("main"),
+          page.locator("main"),
 
-    page.locator("body"),
-  ];
+          page.locator("body"),
+        ];
 
   for (const scope of scopes) {
     const matches =

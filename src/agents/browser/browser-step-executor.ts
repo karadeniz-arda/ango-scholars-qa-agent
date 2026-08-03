@@ -1162,10 +1162,39 @@ let scrollAwareResult:
         }
       }
 
+      const normalizedNegativeText =
+        String(
+          step.text || ""
+        ).trim();
+
+      const isLegacyLanguageLabel =
+        /^(?:Receptive|Productive)$/i.test(
+          normalizedNegativeText
+        );
+
+      const languageAdjustmentOpen =
+        isLegacyLanguageLabel &&
+        await page
+          .locator(
+            ".shared-language-adjustment-popover:visible"
+          )
+          .first()
+          .isVisible()
+          .catch(() => false);
+
       const visible =
         await isBrowserTextVisible(
           page,
-          step.text
+          step.text,
+          languageAdjustmentOpen
+            ? {
+                exact: true,
+                scopeSelector:
+                  ".shared-language-adjustment-popover",
+                allowRequiredAsterisk:
+                  true,
+              }
+            : {}
         );
 
       const passed = !visible;
