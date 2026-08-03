@@ -29,6 +29,10 @@ export type BrowserFixtureCheckpointCapture = (
   args: BrowserFixtureCheckpointArgs
 ) => Promise<void>;
 
+export type BrowserFixtureCleanupRegistration = (
+  cleanup: DeferredCleanup
+) => void;
+
 export type BrowserFixtureProviderContext = {
   page: Page;
   testCase: any;
@@ -38,6 +42,8 @@ export type BrowserFixtureProviderContext = {
     RuntimeResourceContext;
   captureCheckpoint?:
     BrowserFixtureCheckpointCapture;
+  registerCleanup?:
+    BrowserFixtureCleanupRegistration;
 };
 
 export type BrowserFixtureReadyResult = {

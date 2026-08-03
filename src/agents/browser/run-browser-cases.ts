@@ -23,6 +23,7 @@ import {
 } from "./video-evidence-review.js";
 import type {
   BrowserEvidenceSummary,
+  BrowserStepResult,
 } from "./browser-execution-types.js";
 import {
   buildEvidenceReviewCase,
@@ -63,6 +64,10 @@ import {
   executeDeferredCleanups,
   type DeferredCleanup,
 } from "./browser-deferred-cleanup.js";
+import {
+  prepareBrowserFixture,
+  shouldDeferBrowserFixtureBlock,
+} from "./fixtures/browser-fixture-lifecycle.js";
 
 
 
@@ -813,9 +818,19 @@ ensureJobWizardEmptyStateControlStep(
 
   const successSignal =
     buildSuccessSignal(testCase);
-    const blockReason = getBrowserBlockReason(testCase);
+    const blockReason =
+      getBrowserBlockReason(testCase);
 
-    if (blockReason) {
+    const fixtureBlockDeferred =
+      Boolean(blockReason) &&
+      shouldDeferBrowserFixtureBlock(
+        testCase
+      );
+
+    if (
+      blockReason &&
+      !fixtureBlockDeferred
+    ) {
       results.push({
         id: testCase.id,
         status: "BLOCKED",
@@ -848,6 +863,17 @@ ensureJobWizardEmptyStateControlStep(
 
       console.log(` Result: BLOCKED (${blockReason})`);
       continue;
+    }
+
+    if (
+      blockReason &&
+      fixtureBlockDeferred
+    ) {
+      console.log(
+        ` Browser fixture lifecycle deferred ` +
+          `the early fixture block for ` +
+          `${testCase.id}.`
+      );
     }
 
 const deferredCleanups:
@@ -1048,8 +1074,155 @@ if (signedInPersona !== persona) {
         { recursive: true }
       );
 
-      const stepResult =
-        await runGenericBrowserSteps(
+      let fixtureCheckpointCounter = 0;
+
+      const fixturePreparation =
+        await prepareBrowserFixture({
+          page,
+          testCase,
+          persona,
+          baseUrl,
+          ...(
+            testCase
+              .runtimeResourceContext
+              ? {
+                  runtimeResourceContext:
+                    testCase
+                      .runtimeResourceContext,
+                }
+              : {}
+          ),
+          registerCleanup: (
+            cleanup
+          ) => {
+            if (
+              !deferredCleanups.includes(
+                cleanup
+              )
+            ) {
+              deferredCleanups.push(
+                cleanup
+              );
+            }
+          },
+          captureCheckpoint: async ({
+            phase,
+            label,
+            note,
+            fullPage = false,
+          }) => {
+            fixtureCheckpointCounter += 1;
+
+            const safeLabel = label
+              .trim()
+              .toLowerCase()
+              .replace(
+                /[^a-z0-9]+/g,
+                "-"
+              )
+              .replace(
+                /^-+|-+$/g,
+                ""
+              )
+              .slice(0, 48);
+
+            const checkpointPath =
+              `${checkpointDirectory}/` +
+              `${String(
+                fixtureCheckpointCounter
+              ).padStart(2, "0")}-` +
+              `fixture-${phase}-` +
+              `${safeLabel || "checkpoint"}.png`;
+
+            await page.screenshot({
+              path: checkpointPath,
+              fullPage,
+            });
+
+            checkpointEvidence.push({
+              stepIndex: 0,
+              action:
+                `fixture-${phase}`,
+              label:
+                `fixture ${phase} ${label}`,
+              note,
+              screenshotPath:
+                checkpointPath,
+              url: page.url(),
+            });
+
+            console.log(
+              ` Browser fixture checkpoint ` +
+                `captured: phase=${phase}, ` +
+                `label=${label}, ` +
+                `path=${checkpointPath}`
+            );
+          },
+        });
+
+      for (
+        const cleanup of
+        fixturePreparation.cleanups
+      ) {
+        if (
+          !deferredCleanups.includes(
+            cleanup
+          )
+        ) {
+          deferredCleanups.push(
+            cleanup
+          );
+        }
+      }
+
+      let stepResult:
+        BrowserStepResult;
+
+      if (
+        fixturePreparation.status ===
+          "BLOCKED" ||
+        fixturePreparation.status ===
+          "ERROR"
+      ) {
+        stepResult = {
+          status:
+            fixturePreparation.status,
+          reasonCategory:
+            fixturePreparation
+              .reasonCategory,
+          notes: [
+            `Browser fixture provider ` +
+              `"${fixturePreparation.providerId}" ` +
+              `returned ` +
+              `${fixturePreparation.status}.`,
+            ...fixturePreparation.notes,
+          ],
+          deterministicEvidence: [
+            ...fixturePreparation
+              .deterministicEvidence,
+          ],
+        };
+      } else if (
+        blockReason &&
+        fixturePreparation.status ===
+          "NOT_APPLICABLE"
+      ) {
+        stepResult = {
+          status: "BLOCKED",
+          reasonCategory:
+            getBrowserBlockReasonCategory(
+              blockReason
+            ),
+          notes: [
+            blockReason,
+            "Browser fixture lifecycle did not " +
+              "resolve an applicable provider.",
+          ],
+          deterministicEvidence: [],
+        };
+      } else {
+        const genericStepResult =
+          await runGenericBrowserSteps(
           page,
           testCase,
           async ({
@@ -1389,6 +1562,41 @@ deferredCleanups.push(
 );
           }
         );
+
+        const fixtureNotes =
+          fixturePreparation.status ===
+            "READY"
+            ? [
+                `Browser fixture provider ` +
+                  `"${fixturePreparation.providerId}" ` +
+                  `prepared the required state.`,
+                ...fixturePreparation.notes,
+              ]
+            : [];
+
+        const fixtureEvidence =
+          fixturePreparation.status ===
+            "READY"
+            ? fixturePreparation
+                .deterministicEvidence
+            : [];
+
+        stepResult = {
+          ...genericStepResult,
+          notes: [
+            ...fixtureNotes,
+            ...genericStepResult.notes,
+          ],
+          deterministicEvidence: [
+            ...fixtureEvidence,
+            ...(
+              genericStepResult
+                .deterministicEvidence ??
+              []
+            ),
+          ],
+        };
+      }
 
       const passSemanticGuardReason =
         stepResult.status === "PASS"
