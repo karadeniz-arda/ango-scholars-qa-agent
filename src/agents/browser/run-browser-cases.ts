@@ -69,6 +69,9 @@ import {
   shouldPrepareBrowserFixture,
   resolveBrowserFixtureEntryRoute,
 } from "./fixtures/browser-fixture-lifecycle.js";
+import {
+  runGenericBrowserShadow,
+} from "./browser-agent-shadow.js";
 
 
 
@@ -1094,6 +1097,25 @@ if (signedInPersona !== persona) {
           `Authentication session was not ready for ` +
             `${testCase.id}. Protected route kept ` +
             `redirecting to login after 3 attempts.`
+        );
+      }
+
+      const shadowResult =
+        await runGenericBrowserShadow({
+          page,
+          issueKey: String(
+            plan.issueKey || ""
+          ),
+          testCase,
+        });
+
+      if (
+        shadowResult.status !==
+        "SKIPPED"
+      ) {
+        console.log(
+          ` Generic browser shadow: ` +
+            `${shadowResult.note}`
         );
       }
 
