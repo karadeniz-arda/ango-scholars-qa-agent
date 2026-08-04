@@ -536,6 +536,29 @@ export async function prepareAssessmentLanguageModal(
     return;
   }
 
+  const cancelEditButton =
+    page
+      .getByRole("button", {
+        name: /^cancel edit$/i,
+      })
+      .first();
+
+  const editModeAlreadyOpen =
+    await cancelEditButton
+      .isVisible({
+        timeout: 700,
+      })
+      .catch(() => false);
+
+  if (editModeAlreadyOpen) {
+    console.log(
+      ` Assessment modal opener reused existing ` +
+        `edit mode for ${testCase.id}`
+    );
+
+    return;
+  }
+
   console.log(
     ` Assessment modal opener starting for ${testCase.id}`
   );
