@@ -624,14 +624,44 @@ async function executeExactControlClick(
     };
   }
 
-  const afterObservation =
-    await observeBrowserPage(page);
+  /*
+   * GENERIC_READONLY_DELAYED_VERIFICATION_V1
+   *
+   * A click may first trigger a loading state and only later
+   * expose the destination UI. Poll fresh bounded observations
+   * before classifying the action as VERIFICATION_FAILED.
+   */
+  const verificationDeadline =
+    Date.now() + 4_000;
 
-  const stateChanged =
+  let afterObservation =
+    await observeBrowserPage(
+      page
+    );
+
+  let stateChanged =
     observationsDiffer(
       beforeObservation,
       afterObservation
     );
+
+  while (
+    !stateChanged &&
+    Date.now() < verificationDeadline
+  ) {
+    await page.waitForTimeout(250);
+
+    afterObservation =
+      await observeBrowserPage(
+        page
+      );
+
+    stateChanged =
+      observationsDiffer(
+        beforeObservation,
+        afterObservation
+      );
+  }
 
   const resolutionNote =
     usedObservationAlignedFallback
