@@ -253,6 +253,217 @@ async function collectVisibleCandidates(
   return visible;
 }
 
+function observationAlignedSelector(
+  kind: string
+): string | null {
+  if (kind === "button") {
+    return [
+      "button",
+      'input[type="button"]',
+      'input[type="submit"]',
+      'input[type="reset"]',
+      '[role="button"]',
+    ].join(", ");
+  }
+
+  if (kind === "link") {
+    return 'a[href], [role="link"]';
+  }
+
+  if (kind === "tab") {
+    return '[role="tab"]';
+  }
+
+  if (kind === "menuitem") {
+    return '[role="menuitem"]';
+  }
+
+  return null;
+}
+
+async function collectObservationAlignedCandidates(
+  page: Page,
+  kind: string,
+  target: string
+): Promise<Locator[]> {
+  const selector =
+    observationAlignedSelector(
+      kind
+    );
+
+  if (!selector) {
+    return [];
+  }
+
+  const controls =
+    page.locator(selector);
+
+  const count =
+    Math.min(
+      await controls
+        .count()
+        .catch(() => 0),
+      80
+    );
+
+  const normalizedTarget =
+    normalize(target);
+
+  const matches: Locator[] = [];
+
+  for (
+    let index = 0;
+    index < count;
+    index += 1
+  ) {
+    const locator =
+      controls.nth(index);
+
+    const descriptor =
+      await locator
+        .evaluate((element) => {
+          const labelledBy =
+            String(
+              element.getAttribute(
+                "aria-labelledby"
+              ) || ""
+            )
+              .replace(/\s+/g, " ")
+              .trim();
+
+          const labelledByText =
+            labelledBy
+              ? labelledBy
+                  .split(/\s+/)
+                  .map((id) =>
+                    document
+                      .getElementById(id)
+                      ?.textContent ||
+                    ""
+                  )
+                  .join(" ")
+                  .replace(/\s+/g, " ")
+                  .trim()
+              : "";
+
+          let associatedLabelText = "";
+
+          if (
+            element instanceof
+              HTMLInputElement ||
+            element instanceof
+              HTMLTextAreaElement ||
+            element instanceof
+              HTMLSelectElement
+          ) {
+            associatedLabelText =
+              Array.from(
+                element.labels || []
+              )
+                .map((label) =>
+                  label.textContent ||
+                  ""
+                )
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim();
+          }
+
+          if (!associatedLabelText) {
+            associatedLabelText =
+              String(
+                element
+                  .closest("label")
+                  ?.textContent ||
+                ""
+              )
+                .replace(/\s+/g, " ")
+                .trim();
+          }
+
+          const candidates = [
+            element.getAttribute(
+              "aria-label"
+            ),
+            labelledByText,
+            associatedLabelText,
+            element.getAttribute(
+              "title"
+            ),
+            element.getAttribute(
+              "data-placeholder"
+            ),
+            element.getAttribute(
+              "placeholder"
+            ),
+            element instanceof
+              HTMLElement
+              ? element.innerText
+              : "",
+            element.textContent,
+            element.getAttribute(
+              "name"
+            ),
+            element.getAttribute(
+              "id"
+            ),
+          ];
+
+          const firstCandidate =
+            candidates.find(
+              (candidate) =>
+                String(
+                  candidate || ""
+                )
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .length > 0
+            ) || "";
+
+          const label =
+            String(firstCandidate)
+              .replace(/\s+/g, " ")
+              .trim();
+
+          const style =
+            window.getComputedStyle(
+              element
+            );
+
+          const rect =
+            element
+              .getBoundingClientRect();
+
+          const visible =
+            style.display !== "none" &&
+            style.visibility !==
+              "hidden" &&
+            Number(
+              style.opacity || "1"
+            ) > 0 &&
+            rect.width > 0 &&
+            rect.height > 0;
+
+          return {
+            label,
+            visible,
+          };
+        })
+        .catch(() => null);
+
+    if (
+      descriptor?.visible &&
+      normalize(
+        descriptor.label
+      ) === normalizedTarget
+    ) {
+      matches.push(locator);
+    }
+  }
+
+  return matches;
+}
+
 async function executeExactControlClick(
   page: Page,
   proposal: BrowserShadowProposal,
@@ -326,18 +537,33 @@ async function executeExactControlClick(
     };
   }
 
-  const visible =
+  let visible =
     await collectVisibleCandidates(
       candidates
     );
+
+  let usedObservationAlignedFallback =
+    false;
+
+  if (visible.length === 0) {
+    visible =
+      await collectObservationAlignedCandidates(
+        page,
+        matchedTarget.kind || "",
+        action.target
+      );
+
+    usedObservationAlignedFallback =
+      visible.length > 0;
+  }
 
   if (visible.length !== 1) {
     return {
       status: "BLOCKED",
       note:
         visible.length === 0
-          ? "No exact visible semantic control matched the proposal."
-          : "Multiple exact visible semantic controls matched the proposal; execution is ambiguous.",
+          ? "No exact visible semantic or observation-aligned control matched the proposal."
+          : "Multiple exact visible controls matched the proposal; execution is ambiguous.",
       executed: false,
       stateChanged: false,
     };
@@ -407,6 +633,11 @@ async function executeExactControlClick(
       afterObservation
     );
 
+  const resolutionNote =
+    usedObservationAlignedFallback
+      ? " via observation-aligned DOM fallback"
+      : "";
+
   return {
     status:
       stateChanged
@@ -414,8 +645,8 @@ async function executeExactControlClick(
         : "VERIFICATION_FAILED",
     note:
       stateChanged
-        ? `Executed exact read-only click "${action.target}" and observed a visible state change.`
-        : `Executed exact read-only click "${action.target}" but no observable state change was detected.`,
+        ? `Executed exact read-only click "${action.target}"${resolutionNote} and observed a visible state change.`
+        : `Executed exact read-only click "${action.target}"${resolutionNote} but no observable state change was detected.`,
     executed: true,
     stateChanged,
     beforeObservation,
