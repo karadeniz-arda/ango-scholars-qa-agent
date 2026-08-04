@@ -284,8 +284,13 @@ if [[ "$PLAN_MODE" == "canonical" ]]; then
   echo "Canonical plan hashes: PASS"
 fi
 
-grep '^OLLAMA_VISION_MODEL=' .env \
-  || echo "Vision model bulunamadı."
+if [[ -f .env ]] && \
+  grep -q '^OLLAMA_VISION_MODEL=' .env
+then
+  echo "Vision model configured: yes"
+else
+  echo "Vision model configured: no"
+fi
 
 npx tsc --noEmit
 TS_STATUS=$?
@@ -364,6 +369,12 @@ for ISSUE in "${ISSUES[@]}"; do
       "$SMOKE_TIMEOUT_SECONDS" \
       env \
         QA_EVIDENCE_REVIEW=true \
+        QA_ALLOW_API_MUTATIONS=false \
+        QA_ALLOW_BROWSER_MUTATIONS=false \
+        QA_ALLOW_BROWSER_EDIT_FLOWS=false \
+        QA_ALLOW_BROWSER_FIXTURE_PROVISIONING=false \
+        QA_REQUIRE_FIXTURE_CLEANUP=true \
+        QA_BROWSER_MUTATION_PREFLIGHT=false \
         npm run smoke -- --issue "$ISSUE" \
       2>&1 | tee "$ISSUE_DIR/smoke.log"
 
