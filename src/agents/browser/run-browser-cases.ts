@@ -72,6 +72,9 @@ import {
 import {
   runGenericBrowserShadow,
 } from "./browser-agent-shadow.js";
+import {
+  executeBrowserReadOnlyProposal,
+} from "./browser-agent-readonly-executor.js";
 
 
 
@@ -1117,6 +1120,31 @@ if (signedInPersona !== persona) {
           ` Generic browser shadow: ` +
             `${shadowResult.note}`
         );
+      }
+
+      if (
+        shadowResult.status ===
+        "RECORDED"
+      ) {
+        const readOnlyExecutionResult =
+          await executeBrowserReadOnlyProposal({
+            page,
+            proposal:
+              shadowResult.proposal,
+            evaluation:
+              shadowResult.evaluation,
+          });
+
+        if (
+          readOnlyExecutionResult.status !==
+          "SKIPPED"
+        ) {
+          console.log(
+            ` Generic browser read-only execution: ` +
+              `${readOnlyExecutionResult.status} - ` +
+              `${readOnlyExecutionResult.note}`
+          );
+        }
       }
 
       await logVisibleAssessmentControls(
