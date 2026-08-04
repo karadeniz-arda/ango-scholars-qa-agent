@@ -7,6 +7,10 @@ import {
   observeBrowserPage,
   type BrowserObservation,
 } from "./browser-observation.js";
+import {
+  evaluateBrowserShadowProposal,
+  type BrowserShadowProposalEvaluation,
+} from "./browser-agent-shadow-evaluator.js";
 
 export type BrowserShadowDecision =
   | "PROPOSE_ACTION"
@@ -92,11 +96,33 @@ export type BrowserShadowRunResult =
       note: string;
       artifactPath: string;
       proposal: BrowserShadowProposal;
+      evaluation: BrowserShadowProposalEvaluation;
     }
   | {
       status: "ERROR";
       note: string;
     };
+
+export type BrowserShadowArtifact = {
+  schemaVersion: 2;
+  mode: "shadow";
+  createdAt: string;
+  issueKey: string;
+  caseId: string;
+  persona: string;
+  goal: string;
+  successCriteria: string;
+  plannedStartRoute: string;
+  currentUrl: string;
+  observation: BrowserObservation;
+  proposal: BrowserShadowProposal;
+  evaluation: BrowserShadowProposalEvaluation;
+  safety: {
+    executed: false;
+    affectedTestResult: false;
+    mutationRequested: false;
+  };
+};
 
 const DECISIONS =
   new Set<BrowserShadowDecision>([
@@ -587,6 +613,12 @@ export async function runGenericBrowserShadow(
         )
       );
 
+    const evaluation =
+      evaluateBrowserShadowProposal({
+        proposal,
+        observation,
+      });
+
     const now =
       args.now?.() ??
       new Date();
@@ -614,8 +646,8 @@ export async function runGenericBrowserShadow(
         )}-${timestamp}.json`
       );
 
-    const artifact = {
-      schemaVersion: 1,
+    const artifact: BrowserShadowArtifact = {
+      schemaVersion: 2,
       mode: "shadow",
       createdAt:
         now.toISOString(),
@@ -637,6 +669,7 @@ export async function runGenericBrowserShadow(
       observation:
         modelInput.observation,
       proposal,
+      evaluation,
       safety: {
         executed: false,
         affectedTestResult: false,
@@ -656,6 +689,7 @@ export async function runGenericBrowserShadow(
         `${artifactPath}`,
       artifactPath,
       proposal,
+      evaluation,
     };
   } catch (error: unknown) {
     const message =
