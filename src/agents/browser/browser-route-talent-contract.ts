@@ -9,15 +9,14 @@ import {
 import {
   getCaseText,
 } from "./browser-route-semantics.js";
+import {
+  setRuntimeTalentContractFixture,
+  type DesiredTalentContractFixture,
+  type RuntimeTalentContractFixture,
+} from "./fixtures/talent-contract-fixture-context.js";
 import type {
   BrowserPersona,
 } from "./browser-route-semantics.js";
-
-type DesiredTalentContractFixture =
-  | "populated-work-setups"
-  | "empty-work-setups"
-  | "active-or-started"
-  | "any";
 
 type TalentContractFixtureState = {
   desiredFixture:
@@ -26,6 +25,8 @@ type TalentContractFixtureState = {
   contractCount: number;
   workSetupCount: number;
   populatedContractCount: number;
+  runtimeFixture?:
+    RuntimeTalentContractFixture;
 };
 
 const talentContractRouteCache =
@@ -388,6 +389,11 @@ function applyTalentContractFixtureState(
   delete testCase
     .runtimeFixtureResolutionFailure;
 
+  setRuntimeTalentContractFixture(
+    testCase,
+    state?.runtimeFixture
+  );
+
   if (
     !state ||
     state.desiredFixture === "any" ||
@@ -514,6 +520,37 @@ export async function resolveTalentContractDetailRoute(
         desiredFixture
       );
 
+    const contractId =
+      getContractId(
+        selection.selected
+      );
+
+    const contractJobId =
+      getContractJobId(
+        selection.selected
+      );
+
+    const runtimeFixture:
+      RuntimeTalentContractFixture |
+      undefined =
+      contractId
+        ? {
+            contractId,
+            talentId,
+            desiredFixture,
+            matchedState:
+              selection.matchedState,
+            ...(
+              contractJobId
+                ? {
+                    jobId:
+                      contractJobId,
+                  }
+                : {}
+            ),
+          }
+        : undefined;
+
     const fixtureState:
       TalentContractFixtureState = {
         desiredFixture,
@@ -526,6 +563,13 @@ export async function resolveTalentContractDetailRoute(
         populatedContractCount:
           selection
             .populatedContractCount,
+        ...(
+          runtimeFixture
+            ? {
+                runtimeFixture,
+              }
+            : {}
+        ),
       };
 
     talentContractFixtureStateCache.set(
@@ -537,11 +581,6 @@ export async function resolveTalentContractDetailRoute(
       testCase,
       fixtureState
     );
-
-    const contractId =
-      getContractId(
-        selection.selected
-      );
 
     if (!contractId) {
       console.log(
