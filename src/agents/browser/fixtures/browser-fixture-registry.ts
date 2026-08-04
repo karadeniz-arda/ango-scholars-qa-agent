@@ -1,4 +1,7 @@
 import {
+  talentContractWorkSetupFixtureProvider,
+} from "./talent-contract-work-setup-fixture.js";
+import {
   talentProfileLanguageFixtureProvider,
 } from "./talent-profile-language-fixture.js";
 import type {
@@ -14,6 +17,7 @@ import type {
  */
 const browserFixtureProviders:
   BrowserFixtureProvider[] = [
+    talentContractWorkSetupFixtureProvider,
     talentProfileLanguageFixtureProvider,
   ];
 
