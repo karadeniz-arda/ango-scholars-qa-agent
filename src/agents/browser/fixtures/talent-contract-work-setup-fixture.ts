@@ -35,6 +35,25 @@ export type WorkSetupMutationResult = {
   responseText: string;
 };
 
+export type WorkSetupUiReadinessObservation = {
+  sectionVisible: boolean;
+  emptyStateVisible: boolean;
+  expectedCardVisible: boolean;
+  loadingVisible: boolean;
+};
+
+export function isWorkSetupUiReady(
+  observation:
+    WorkSetupUiReadinessObservation
+): boolean {
+  return (
+    observation.sectionVisible &&
+    !observation.emptyStateVisible &&
+    observation.expectedCardVisible &&
+    !observation.loadingVisible
+  );
+}
+
 export type TalentContractWorkSetupFixtureDependencies = {
   getApiUrl: () => string;
 
@@ -65,7 +84,8 @@ export type TalentContractWorkSetupFixtureDependencies = {
   ) => Promise<void>;
 
   verifyPopulatedSurface: (
-    page: Page
+    page: Page,
+    expectedCardText?: string
   ) => Promise<boolean>;
 
   wait: (
@@ -77,6 +97,7 @@ export type SafeWorkSetupCandidateSelection =
   | {
       status: "SELECTED";
       workSetupId: string;
+      workSetupTitle?: string;
       companyCount: number;
       visibleCount: number;
     }
@@ -135,6 +156,38 @@ function getVisibleTalentWorkSetupId(
       value?.workSetup?.workSetupId
     )
   );
+}
+
+function getWorkSetupTitle(
+  value: any
+): string | undefined {
+  const candidates = [
+    value?.title,
+    value?.name,
+    value?.workSetup?.title,
+    value?.workSetup?.name,
+    value?.workSetupVersion?.title,
+    value?.workSetupVersion?.name,
+    value?.latestVersion?.title,
+    value?.latestVersion?.name,
+  ];
+
+  for (const candidate of candidates) {
+    if (
+      typeof candidate !== "string"
+    ) {
+      continue;
+    }
+
+    const normalized =
+      candidate.trim();
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
 }
 
 function workSetupCandidateIsUsable(
@@ -227,6 +280,11 @@ export function selectSafeWorkSetupCandidate(
         item
       );
 
+    const workSetupTitle =
+      getWorkSetupTitle(
+        item
+      );
+
     if (
       workSetupId &&
       !visibleIds.has(
@@ -236,6 +294,13 @@ export function selectSafeWorkSetupCandidate(
       return {
         status: "SELECTED",
         workSetupId,
+        ...(
+          workSetupTitle
+            ? {
+                workSetupTitle,
+              }
+            : {}
+        ),
         companyCount:
           companyItems.length,
         visibleCount:
@@ -344,12 +409,46 @@ async function refreshTalentContractSurface(
   });
 
   await page.waitForTimeout(
-    1200
+    500
   );
 }
 
+async function locatorHasVisibleMatch(
+  locator: ReturnType<
+    Page["locator"]
+  >,
+  limit = 30
+): Promise<boolean> {
+  const count =
+    Math.min(
+      await locator
+        .count()
+        .catch(() => 0),
+      limit
+    );
+
+  for (
+    let index = 0;
+    index < count;
+    index += 1
+  ) {
+    const visible =
+      await locator
+        .nth(index)
+        .isVisible()
+        .catch(() => false);
+
+    if (visible) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function verifyTalentContractPopulatedSurface(
-  page: Page
+  page: Page,
+  expectedCardText?: string
 ): Promise<boolean> {
   const workSetups =
     page.getByText(
@@ -359,20 +458,6 @@ async function verifyTalentContractPopulatedSurface(
       }
     );
 
-  const sectionVisible =
-    await workSetups
-      .first()
-      .waitFor({
-        state: "visible",
-        timeout: 10000,
-      })
-      .then(() => true)
-      .catch(() => false);
-
-  if (!sectionVisible) {
-    return false;
-  }
-
   const emptyState =
     page.getByText(
       "No work setups are assigned to this job.",
@@ -381,13 +466,65 @@ async function verifyTalentContractPopulatedSurface(
       }
     );
 
-  const emptyStateVisible =
-    await emptyState
-      .first()
-      .isVisible()
-      .catch(() => false);
+  const visibleLoadingIndicators =
+    page.locator(
+      '[role="progressbar"]'
+    );
 
-  return !emptyStateVisible;
+  const expectedCard =
+    expectedCardText
+      ? page.getByText(
+          expectedCardText,
+          {
+            exact: true,
+          }
+        )
+      : page.getByText(
+          /Pending|Completed|Approved|Rejected|In Progress/i
+        );
+
+  for (
+    let attempt = 0;
+    attempt < 40;
+    attempt += 1
+  ) {
+    const observation:
+      WorkSetupUiReadinessObservation = {
+        sectionVisible:
+          await locatorHasVisibleMatch(
+            workSetups
+          ),
+
+        emptyStateVisible:
+          await locatorHasVisibleMatch(
+            emptyState
+          ),
+
+        expectedCardVisible:
+          await locatorHasVisibleMatch(
+            expectedCard
+          ),
+
+        loadingVisible:
+          await locatorHasVisibleMatch(
+            visibleLoadingIndicators
+          ),
+      };
+
+    if (
+      isWorkSetupUiReady(
+        observation
+      )
+    ) {
+      return true;
+    }
+
+    await page.waitForTimeout(
+      500
+    );
+  }
+
+  return false;
 }
 
 const defaultDependencies:
@@ -726,13 +863,16 @@ export function createTalentContractWorkSetupFixtureProvider(
           const populated =
             await dependencies
               .verifyPopulatedSurface(
-                page
+                page,
+                getWorkSetupTitle(
+                  visibleBeforeItems[0]
+                )
               );
 
           if (!populated) {
             return blockedResult(
               "FIXTURE_PROVISIONING_FAILED",
-              "Talent API already exposed Work Setup records, but the populated contract UI surface could not be verified."
+              "Talent API already exposed Work Setup records, but the exact compact Work Setup card did not finish rendering without a visible loading indicator."
             );
           }
 
@@ -937,13 +1077,14 @@ export function createTalentContractWorkSetupFixtureProvider(
         const populated =
           await dependencies
             .verifyPopulatedSurface(
-              page
+              page,
+              selection.workSetupTitle
             );
 
         if (!populated) {
           return blockedResult(
             "FIXTURE_PROVISIONING_FAILED",
-            `Work Setup ${selection.workSetupId} persisted through the API, but the populated contract UI surface was not verified.`,
+            `Work Setup ${selection.workSetupId} persisted through the API, but the exact compact Work Setup card did not finish rendering without a visible loading indicator.`,
             [cleanup]
           );
         }
