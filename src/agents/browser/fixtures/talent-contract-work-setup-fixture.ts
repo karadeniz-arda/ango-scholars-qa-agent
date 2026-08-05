@@ -6,9 +6,16 @@ import type {
 import type {
   BrowserPersona,
 } from "../browser-session-manager.js";
+import {
+  runGenericMutationCore,
+} from "../mutation/generic-mutation-core.js";
+import type {
+  GenericMutationCandidate,
+  GenericMutationCleanup,
+  GenericMutationJson,
+} from "../mutation/generic-mutation-types.js";
 import type {
   DeferredCleanup,
-  DeferredCleanupResult,
 } from "../browser-deferred-cleanup.js";
 import {
   apiGet,
@@ -266,6 +273,69 @@ export function buildWorkSetupFixtureRequirementContext(
   };
 }
 
+function workSetupRequirementsAllowReusePreference(
+  requirements:
+    GenericFixtureRequirementContext
+): boolean {
+  const combined = [
+    requirements.goal,
+    requirements.successCriteria,
+    ...requirements.automatedChecks,
+    ...requirements.fixtureRequirements,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return !(
+    /\b(?:subtype|category|type|status)\b/.test(
+      combined
+    ) ||
+    /\b(?:file|document|approval|approved|rejected|pending|completed)\b/.test(
+      combined
+    )
+  );
+}
+
+function workSetupCandidateMeetsRequiredSubtype(
+  requirements:
+    GenericFixtureRequirementContext,
+  candidate:
+    GenericFixtureCandidateInput
+): boolean {
+  const automatedSurface = [
+    requirements.goal,
+    requirements.successCriteria,
+    ...requirements.automatedChecks,
+    ...requirements.fixtureRequirements,
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    /\bdocument-required indication\b/.test(
+      automatedSurface
+    ) &&
+    candidate
+      .semanticCapabilities
+      .requiresFileUpload !== true
+  ) {
+    return false;
+  }
+
+  if (
+    /\bapproval-required indication\b/.test(
+      automatedSurface
+    ) &&
+    candidate
+      .semanticCapabilities
+      .requiresApproval !== true
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function normalizeId(
   value: unknown
 ): string | undefined {
@@ -353,7 +423,9 @@ function workSetupCandidateIsUsable(
 ): boolean {
   if (
     value?.isActive === false ||
-    value?.active === false
+    value?.active === false ||
+    value?.isDeleted === true ||
+    value?.deleted === true
   ) {
     return false;
   }
@@ -370,6 +442,121 @@ function workSetupCandidateIsUsable(
     "deleted",
     "inactive",
   ].includes(status);
+}
+
+function getWorkSetupSemanticCapabilities(
+  value: any
+): Record<
+  string,
+  string | number | boolean | null
+> {
+  const capabilities:
+    Record<
+      string,
+      string | number | boolean | null
+    > = {};
+
+  const title =
+    getWorkSetupTitle(value);
+
+  if (title) {
+    capabilities.title = title;
+  }
+
+  const approvedStrings = [
+    ["description", value?.description],
+    ["description", value?.latestVersion?.description],
+    ["category", value?.category],
+    ["type", value?.type],
+    ["status", value?.status],
+  ] as const;
+
+  for (
+    const [key, raw]
+    of approvedStrings
+  ) {
+    if (
+      capabilities[key] !==
+        undefined ||
+      typeof raw !== "string"
+    ) {
+      continue;
+    }
+
+    const normalized =
+      normalizeWorkSetupFixtureRequirementText(
+        raw.replace(/<[^>]*>/g, " "),
+        240
+      );
+
+    if (normalized) {
+      capabilities[key] =
+        normalized;
+    }
+  }
+
+  const approvedBooleans = [
+    [
+      "requiresDocument",
+      value?.requiresDocument,
+    ],
+    [
+      "requiresDocument",
+      value?.latestVersion
+        ?.requiresDocument,
+    ],
+    [
+      "requiresFileUpload",
+      value?.requireFileUpload,
+    ],
+    [
+      "requiresFileUpload",
+      value?.requiresFileUpload,
+    ],
+    [
+      "requiresFileUpload",
+      value?.latestVersion
+        ?.requiresFileUpload,
+    ],
+    [
+      "requiresApproval",
+      value?.requireApproval,
+    ],
+    [
+      "requiresApproval",
+      value?.requiresApproval,
+    ],
+  ] as const;
+
+  for (
+    const [key, raw]
+    of approvedBooleans
+  ) {
+    if (
+      capabilities[key] ===
+        undefined &&
+      typeof raw === "boolean"
+    ) {
+      capabilities[key] = raw;
+    }
+  }
+
+  capabilities.hasReferenceDocument =
+    [
+      value?.documentPath,
+      value?.documentUrl,
+      value?.latestVersion
+        ?.documentPath,
+      value?.latestVersion
+        ?.documentUrl,
+    ].some(
+      (candidate) =>
+        typeof candidate ===
+          "string" &&
+        candidate.trim().length > 0
+    );
+
+  return capabilities;
 }
 
 export function adaptWorkSetupRuntimeCandidates(
@@ -480,7 +667,10 @@ export function adaptWorkSetupRuntimeCandidates(
         visibleIds.has(
           workSetupId
         ),
-      metadata: item,
+      semanticCapabilities:
+        getWorkSetupSemanticCapabilities(
+          item
+        ),
     });
   }
 
@@ -511,7 +701,8 @@ export function adaptWorkSetupRuntimeCandidates(
 function isGenericFixtureCandidateSelectionMode(
   value: unknown
 ): value is
-  GenericFixtureCandidateSelectionMode {
+  "REUSE_EXISTING" |
+  "ATTACH_NEW" {
   return (
     value === "REUSE_EXISTING" ||
     value === "ATTACH_NEW"
@@ -557,7 +748,25 @@ export async function resolveWorkSetupFixtureCandidateDecision(
       await args.selectCandidate({
         requirements,
         candidates:
-          runtimeCandidates.candidates,
+          runtimeCandidates.candidates
+            .map(
+              (candidate) => ({
+                ...candidate,
+                usable:
+                  candidate.usable !==
+                    false &&
+                  workSetupCandidateMeetsRequiredSubtype(
+                    requirements,
+                    candidate
+                  ),
+              })
+            ),
+        selectionPolicy: {
+          allowReusePreference:
+            workSetupRequirementsAllowReusePreference(
+              requirements
+            ),
+        },
         ...(
           args.requestCandidateProposal
             ? {
@@ -643,7 +852,8 @@ export async function resolveWorkSetupFixtureCandidateDecision(
       !selectedCandidateId ||
       selectionResult
         .proposal.candidateId !==
-        selectedCandidateId ||
+        selectionResult.candidate
+          .selectionKey ||
       (
         selectionResult
           .evaluation.candidate &&
@@ -1422,349 +1632,382 @@ export function createTalentContractWorkSetupFixtureProvider(
               companyToken
             );
 
-        const selection =
-          await resolveWorkSetupFixtureCandidateDecision({
-            testCase,
+        const runtimeCandidates =
+          adaptWorkSetupRuntimeCandidates(
             companyData,
-            visibleTalentData:
-              visibleBefore,
-            selectCandidate:
-              dependencies
-                .selectCandidate,
-            ...(
-              dependencies
-                .requestCandidateProposal
-                ? {
-                    requestCandidateProposal:
-                      dependencies
-                        .requestCandidateProposal,
-                  }
-                : {}
-            ),
-          });
+            visibleBefore
+          );
 
         if (
-          selection.status ===
+          runtimeCandidates.status ===
           "BLOCKED"
         ) {
-          const diagnostics:
-            string[] = [];
-
-          if (
-            selection.evaluationStatus
-          ) {
-            diagnostics.push(
-              `evaluationStatus=${selection.evaluationStatus}`
-            );
-          }
-
-          if (
-            typeof selection
-              .candidateCount ===
-              "number"
-          ) {
-            diagnostics.push(
-              `candidateCount=${selection.candidateCount}`
-            );
-          }
-
-          if (
-            typeof selection
-              .companyRecordCount ===
-              "number"
-          ) {
-            diagnostics.push(
-              `companyRecordCount=${selection.companyRecordCount}`
-            );
-          }
-
-          if (
-            typeof selection
-              .visibleRecordCount ===
-              "number"
-          ) {
-            diagnostics.push(
-              `visibleRecordCount=${selection.visibleRecordCount}`
-            );
-          }
-
           return blockedResult(
             "FIXTURE_PRECONDITION_UNSAFE",
-            `${selection.reason}${
-              diagnostics.length > 0
-                ? ` ${diagnostics.join(
-                    ", "
-                  )}.`
-                : ""
-            }`
+            runtimeCandidates.reason
           );
         }
 
-        if (
-          selection.status ===
-          "ERROR"
-        ) {
-          return errorResult(
-            "FIXTURE_SELECTION_ERROR",
-            selection.reason
-          );
-        }
-
-        if (!selection.workSetupTitle) {
-          return blockedResult(
-            "FIXTURE_PRECONDITION_UNSAFE",
-            `Selected Work Setup ${selection.workSetupId} did not expose an exact runtime title required for selected-card UI verification.`
-          );
-        }
-
-        if (
-          selection.status ===
-          "REUSE_EXISTING"
-        ) {
-          if (
-            !containsExactWorkSetup(
-              visibleBefore,
-              selection.workSetupId
-            )
-          ) {
-            return blockedResult(
-              "FIXTURE_PRECONDITION_UNSAFE",
-              `Selected reusable Work Setup ${selection.workSetupId} was not present in the exact talent-visible runtime state.`
-            );
-          }
-
-          await dependencies
-            .refreshSurface(page);
-
-          const populated =
-            await dependencies
-              .verifyPopulatedSurface(
-                page,
-                selection
-                  .workSetupTitle
-              );
-
-          if (!populated) {
-            return blockedResult(
-              "FIXTURE_PROVISIONING_FAILED",
-              `Reusable Work Setup ${selection.workSetupId} was present in the talent API, but its exact compact card did not finish rendering without a visible loading indicator.`
-            );
-          }
-
-          const note =
-            `Reused existing Work Setup ${selection.workSetupId} for contractId=${runtimeFixture.contractId}, jobId=${jobId}; exact API/UI state was verified and no cleanup ownership was established.`;
-
-          await captureCheckpoint?.({
-            phase: "setup",
-            label:
-              "work-setup-reused",
-            note,
-            fullPage: true,
-          });
-
-          return readyResult(
-            note
-          );
-        }
-
-        if (
-          containsExactWorkSetup(
-            visibleBefore,
-            selection.workSetupId
-          )
-        ) {
-          return blockedResult(
-            "FIXTURE_PRECONDITION_UNSAFE",
-            `Selected attachable Work Setup ${selection.workSetupId} was already present in the exact talent-visible runtime state.`
-          );
-        }
-
-        const attachmentPath =
-          buildAttachmentPath(
-            companyId,
-            selection.workSetupId,
-            jobId
+        const requirements =
+          buildWorkSetupFixtureRequirementContext(
+            testCase
           );
 
-        let attachmentCreated =
-          false;
-
-        const cleanup:
-          DeferredCleanup = {
-            label:
-              `talent contract Work Setup attachment ${selection.workSetupId} -> job ${jobId}`,
-
-            evidenceAction:
-              "cleanupBrowserFixture",
-
-            expected:
-              "Delete only the exact Work Setup-to-job attachment created by this provider and verify it is no longer visible to the talent",
-
-            notePrefix:
-              "Talent contract Work Setup cleanup",
-
-            run:
-              async (): Promise<
-                DeferredCleanupResult
-              > => {
-                if (
-                  !attachmentCreated
-                ) {
-                  return {
-                    status: "PASS",
-                    note:
-                      "No provider-owned attachment was created, so cleanup was a verified no-op.",
-                  };
-                }
-
-                const cleanupMutation =
-                  await dependencies
-                    .mutate(
-                      apiUrl,
-                      attachmentPath,
-                      "DELETE",
-                      companyToken
-                    );
-
-                if (
-                  cleanupMutation
-                    .status !== 200
-                ) {
-                  return {
-                    status: "FAIL",
-                    note:
-                      `DELETE returned status=${cleanupMutation.status}; exact provider-owned attachment could not be proven removed.`,
-                  };
-                }
-
-                const absent =
-                  await waitForAttachmentState(
-                    dependencies,
-                    {
-                      apiUrl,
-                      path:
-                        talentWorkSetupsPath,
-                      talentToken,
-                      workSetupId:
-                        selection
-                          .workSetupId,
-                      expectedPresent:
-                        false,
-                    }
-                  );
-
-                if (!absent) {
-                  return {
-                    status: "FAIL",
-                    note:
-                      `DELETE returned 200, but Work Setup ${selection.workSetupId} remained visible for talentId=${runtimeFixture.talentId}, jobId=${jobId}.`,
-                  };
-                }
-
-                await dependencies
-                  .refreshSurface(page);
-
-                await captureCheckpoint?.({
-                  phase: "cleanup",
-                  label:
-                    "work-setup-detached",
-                  note:
-                    `Removed provider-owned Work Setup ${selection.workSetupId} from job ${jobId} and verified the talent API no longer returns it.`,
-                  fullPage: true,
-                });
-
-                return {
-                  status: "PASS",
-                  note:
-                    `Removed provider-owned Work Setup ${selection.workSetupId} from job ${jobId}; DELETE returned 200 and the talent API no longer returns the attachment.`,
+        const mutationCandidates:
+          GenericMutationCandidate[] =
+          runtimeCandidates.candidates.map(
+            (candidate) => {
+              const workSetupId =
+                candidate.id;
+              const workSetupTitle =
+                candidate.label;
+              const alreadyAttached =
+                candidate
+                  .alreadyAttached ===
+                true;
+              const attachmentPath =
+                buildAttachmentPath(
+                  companyId,
+                  workSetupId,
+                  jobId
+                );
+              const executionReference:
+                GenericMutationJson = {
+                  attachmentPath,
+                  talentCollectionPath:
+                    talentWorkSetupsPath,
+                  resourceId:
+                    workSetupId,
                 };
-              },
-          };
 
-        registerCleanup?.(
-          cleanup
-        );
+              return {
+                id: workSetupId,
+                ...(workSetupTitle
+                  ? {
+                      label:
+                        workSetupTitle,
+                    }
+                  : {}),
+                transitionKind:
+                  alreadyAttached
+                    ? "REUSE_EXISTING"
+                    : "ATTACH_EXISTING",
+                executionReference,
+                semanticCapabilities:
+                  candidate
+                    .semanticCapabilities,
+                eligible:
+                  candidate.usable !==
+                    false &&
+                  Boolean(
+                    workSetupTitle
+                  ) &&
+                  workSetupCandidateMeetsRequiredSubtype(
+                    requirements,
+                    candidate
+                  ),
+                preconditions: [
+                  "The runtime resource has an exact discovered identifier.",
+                  "The target attachment state was observed before selection.",
+                  "An exact user-visible label is available for post-state verification.",
+                ],
+                mutationPolicy:
+                  alreadyAttached
+                    ? {
+                        mutates: false,
+                        ownership:
+                          "PRE_EXISTING",
+                        rollbackRequired:
+                          false,
+                      }
+                    : {
+                        mutates: true,
+                        ownership:
+                          "AGENT_OWNED_ON_SUCCESS",
+                        rollbackRequired:
+                          true,
+                      },
+                expectedPostState: {
+                  apiPresent: true,
+                  uiReady: true,
+                },
+                observePostState:
+                  async () => {
+                    const apiPresent =
+                      await waitForAttachmentState(
+                        dependencies,
+                        {
+                          apiUrl,
+                          path:
+                            talentWorkSetupsPath,
+                          talentToken,
+                          workSetupId,
+                          expectedPresent:
+                            true,
+                        }
+                      );
 
-        const setupMutation =
-          await dependencies
-            .mutate(
-              apiUrl,
-              attachmentPath,
-              "POST",
-              companyToken
-            );
+                    if (apiPresent) {
+                      await dependencies
+                        .refreshSurface(
+                          page
+                        );
+                    }
 
-        if (
-          setupMutation.status !==
-          201
-        ) {
-          return blockedResult(
-            "FIXTURE_PROVISIONING_FAILED",
-            `POST attach returned status=${setupMutation.status}; expected 201 for Work Setup ${selection.workSetupId} and job ${jobId}.`,
-            [cleanup]
-          );
-        }
+                    const uiReady =
+                      apiPresent &&
+                      Boolean(
+                        workSetupTitle
+                      ) &&
+                      await dependencies
+                        .verifyPopulatedSurface(
+                          page,
+                          workSetupTitle
+                        );
 
-        attachmentCreated =
-          true;
+                    return {
+                      observedState: {
+                        apiPresent,
+                        uiReady,
+                      },
+                      note:
+                        `apiPresent=${apiPresent}, uiReady=${uiReady}`,
+                    };
+                  },
+                ...(!alreadyAttached
+                  ? {
+                      execute:
+                        async () => {
+                          const mutation =
+                            await dependencies
+                              .mutate(
+                                apiUrl,
+                                attachmentPath,
+                                "POST",
+                                companyToken
+                              );
 
-        const persisted =
-          await waitForAttachmentState(
-            dependencies,
-            {
-              apiUrl,
-              path:
-                talentWorkSetupsPath,
-              talentToken,
-              workSetupId:
-                selection
-                  .workSetupId,
-              expectedPresent:
-                true,
+                          return {
+                            status:
+                              mutation.status ===
+                              201
+                                ? "APPLIED"
+                                : "NOT_APPLIED",
+                            executionReference,
+                            note:
+                              `POST attach status=${mutation.status}; expected 201.`,
+                          } as const;
+                        },
+                      rollback:
+                        async () => {
+                          const mutation =
+                            await dependencies
+                              .mutate(
+                                apiUrl,
+                                attachmentPath,
+                                "DELETE",
+                                companyToken
+                              );
+
+                          return {
+                            status:
+                              mutation.status ===
+                              200
+                                ? "ROLLED_BACK"
+                                : "FAILED",
+                            executionReference,
+                            note:
+                              `DELETE detach status=${mutation.status}; expected 200.`,
+                          } as const;
+                        },
+                      expectedRollbackState: {
+                        apiPresent: false,
+                      },
+                      observeRollbackState:
+                        async () => {
+                          const absent =
+                            await waitForAttachmentState(
+                              dependencies,
+                              {
+                                apiUrl,
+                                path:
+                                  talentWorkSetupsPath,
+                                talentToken,
+                                workSetupId,
+                                expectedPresent:
+                                  false,
+                              }
+                            );
+
+                          if (absent) {
+                            await dependencies
+                              .refreshSurface(
+                                page
+                              );
+
+                            await captureCheckpoint?.({
+                              phase:
+                                "cleanup",
+                              label:
+                                "work-setup-detached",
+                              note:
+                                `Removed provider-owned Work Setup ${workSetupId} from job ${jobId} and verified the talent API no longer returns it.`,
+                              fullPage: true,
+                            });
+                          }
+
+                          return {
+                            observedState: {
+                              apiPresent:
+                                !absent,
+                            },
+                            note:
+                              absent
+                                ? "The exact attachment is absent from the talent API."
+                                : "The exact attachment remains present in the talent API.",
+                          };
+                        },
+                    }
+                  : {}),
+              };
             }
           );
 
-        if (!persisted) {
-          return blockedResult(
-            "FIXTURE_PROVISIONING_FAILED",
-            `POST returned 201, but Work Setup ${selection.workSetupId} did not become visible for talentId=${runtimeFixture.talentId}, jobId=${jobId}.`,
-            [cleanup]
-          );
-        }
+        const cleanupAdapters =
+          new Map<
+            GenericMutationCleanup,
+            DeferredCleanup
+          >();
 
-        await dependencies
-          .refreshSurface(page);
-
-        const populated =
-          await dependencies
-            .verifyPopulatedSurface(
-              page,
-              selection.workSetupTitle
+        const adaptCleanup = (
+          cleanup:
+            GenericMutationCleanup
+        ): DeferredCleanup => {
+          const existing =
+            cleanupAdapters.get(
+              cleanup
             );
 
-        if (!populated) {
+          if (existing) {
+            return existing;
+          }
+
+          const adapted:
+            DeferredCleanup = {
+              label: cleanup.label,
+              evidenceAction:
+                "cleanupBrowserFixture",
+              expected:
+                cleanup.expected,
+              notePrefix:
+                "Talent contract Work Setup cleanup",
+              run: cleanup.run,
+            };
+
+          cleanupAdapters.set(
+            cleanup,
+            adapted
+          );
+
+          return adapted;
+        };
+
+        const mutationResult =
+          await runGenericMutationCore({
+            requirements,
+            candidates:
+              mutationCandidates,
+            selectCandidate:
+              dependencies
+                .selectCandidate,
+            selectionPolicy: {
+              allowReusePreference:
+                workSetupRequirementsAllowReusePreference(
+                  requirements
+                ),
+            },
+            ...(dependencies
+              .requestCandidateProposal
+              ? {
+                  requestProposal:
+                    dependencies
+                      .requestCandidateProposal,
+                }
+              : {}),
+            ...(registerCleanup
+              ? {
+                  registerCleanup:
+                    (cleanup) => {
+                      registerCleanup(
+                        adaptCleanup(
+                          cleanup
+                        )
+                      );
+                    },
+                }
+              : {}),
+          });
+
+        const cleanups =
+          mutationResult.cleanups.map(
+            adaptCleanup
+          );
+
+        if (
+          mutationResult.status ===
+          "ERROR"
+        ) {
+          return {
+            ...errorResult(
+              "FIXTURE_SELECTION_ERROR",
+              mutationResult.note
+            ),
+            cleanups,
+          };
+        }
+
+        if (
+          mutationResult.status ===
+          "BLOCKED"
+        ) {
+          const diagnostic =
+            mutationResult.evaluation
+              ? ` evaluationStatus=${mutationResult.evaluation.status}.`
+              : "";
+
           return blockedResult(
-            "FIXTURE_PROVISIONING_FAILED",
-            `Work Setup ${selection.workSetupId} persisted through the API, but the exact compact Work Setup card did not finish rendering without a visible loading indicator.`,
-            [cleanup]
+            mutationResult.reasonCategory ===
+              "TRANSITION_SELECTION_BLOCKED"
+              ? "FIXTURE_PRECONDITION_UNSAFE"
+              : "FIXTURE_PROVISIONING_FAILED",
+            `${mutationResult.note}${diagnostic}`,
+            cleanups
           );
         }
 
+        const selected =
+          mutationResult.candidate;
+        const reused =
+          selected.transitionKind ===
+          "REUSE_EXISTING";
         const setupNote =
-          `Attached existing Work Setup ${selection.workSetupId} to job ${jobId} for contractId=${runtimeFixture.contractId}; POST returned 201 and talent API/UI persistence checks passed.`;
+          reused
+            ? `Reused existing Work Setup ${selected.id} for contractId=${runtimeFixture.contractId}, jobId=${jobId}; exact API/UI state was verified and no cleanup ownership was established.`
+            : `Attached existing Work Setup ${selected.id} to job ${jobId} for contractId=${runtimeFixture.contractId}; POST returned 201 and talent API/UI persistence checks passed.`;
 
         await captureCheckpoint?.({
           phase: "setup",
           label:
-            "work-setup-attached",
-          note:
-            setupNote,
+            reused
+              ? "work-setup-reused"
+              : "work-setup-attached",
+          note: setupNote,
           fullPage: true,
         });
 
         return readyResult(
           setupNote,
-          [cleanup]
+          cleanups
         );
       },
   };

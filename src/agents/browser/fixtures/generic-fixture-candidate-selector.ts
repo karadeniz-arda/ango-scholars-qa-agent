@@ -1,3 +1,7 @@
+import {
+  createHash,
+} from "node:crypto";
+
 export type GenericFixtureScalar =
   | string
   | number
@@ -9,14 +13,23 @@ export type GenericFixtureCandidateInput = {
   label?: string;
   usable?: boolean;
   alreadyAttached?: boolean;
-  metadata: unknown;
+  selectionMode?:
+    GenericFixtureCandidateSelectionMode;
+  semanticCapabilities:
+    Record<
+      string,
+      GenericFixtureScalar
+    >;
 };
 
 export type GenericFixtureCandidate = {
   id: string;
+  selectionKey: string;
   label?: string;
   usable: boolean;
   alreadyAttached: boolean;
+  selectionMode:
+    GenericFixtureCandidateSelectionMode;
   capabilities:
     Record<
       string,
@@ -48,7 +61,10 @@ export type GenericFixtureCandidateConfidence =
 
 export type GenericFixtureCandidateSelectionMode =
   | "ATTACH_NEW"
-  | "REUSE_EXISTING";
+  | "REUSE_EXISTING"
+  | "CREATE_NEW"
+  | "UPDATE_EXISTING"
+  | "DELETE_EXISTING";
 
 export type GenericFixtureCandidateProposal = {
   decision:
@@ -66,8 +82,25 @@ export type GenericFixtureCandidateProposal = {
 export type GenericFixtureCandidateModelInput = {
   requirements:
     GenericFixtureRequirementContext;
+  selectionPolicy: {
+    allowReusePreference: boolean;
+  };
   candidates:
-    GenericFixtureCandidate[];
+    GenericFixtureCandidateModelCandidate[];
+};
+
+export type GenericFixtureCandidateModelCandidate = {
+  candidateId: string;
+  label?: string;
+  usable: boolean;
+  alreadyAttached: boolean;
+  selectionMode:
+    GenericFixtureCandidateSelectionMode;
+  capabilities:
+    Record<
+      string,
+      GenericFixtureScalar
+    >;
 };
 
 export type GenericFixtureCandidateRequestProposal =
@@ -89,7 +122,10 @@ export type GenericFixtureCandidateEvaluationStatus =
   | "EVIDENCE_REQUIRED"
   | "EVIDENCE_PATH_UNSAFE"
   | "EVIDENCE_NOT_GROUNDED"
-  | "EVIDENCE_VALUE_MISMATCH";
+  | "EVIDENCE_VALUE_MISMATCH"
+  | "INSUFFICIENT_COMPARATIVE_EVIDENCE"
+  | "SEMANTIC_CONTEXT_REQUIRED"
+  | "SELECTION_MODE_MISMATCH";
 
 export type GenericFixtureCandidateEvaluation = {
   status:
@@ -107,6 +143,9 @@ export type RunGenericFixtureCandidateSelectionArgs = {
     GenericFixtureCandidateInput[];
   requestProposal?:
     GenericFixtureCandidateRequestProposal;
+  selectionPolicy?: {
+    allowReusePreference?: boolean;
+  };
 };
 
 export type GenericFixtureCandidateSelectionResult =
@@ -156,6 +195,9 @@ const SELECTION_MODES =
   >([
     "ATTACH_NEW",
     "REUSE_EXISTING",
+    "CREATE_NEW",
+    "UPDATE_EXISTING",
+    "DELETE_EXISTING",
   ]);
 
 const SECRET_KEY =
@@ -173,7 +215,44 @@ const NON_SEMANTIC_EVIDENCE_KEY =
     "updatedat",
   ]);
 
-function evidencePathIsUnsafe(
+function terminalPathToken(
+  path: string
+): string {
+  const terminalKey =
+    path
+      .replace(/\[\d+\]/g, "")
+      .split(".")
+      .at(-1)
+      ?.trim() ?? "";
+
+  const tokens = terminalKey
+    .replace(
+      /([a-z0-9])([A-Z])/g,
+      "$1 $2"
+    )
+    .split(/[^a-zA-Z0-9]+/)
+    .map((token) =>
+      token.toLowerCase()
+    )
+    .filter(Boolean);
+
+  return tokens.at(-1) ?? "";
+}
+
+function compactTerminalPathKey(
+  path: string
+): string {
+  return (
+    path
+      .replace(/\[\d+\]/g, "")
+      .split(".")
+      .at(-1) ?? ""
+  )
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .toLowerCase();
+}
+
+export function genericFixtureEvidencePathIsUnsafe(
   path: string
 ): boolean {
   if (
@@ -184,18 +263,17 @@ function evidencePathIsUnsafe(
   }
 
   const terminalKey =
-    path
-      .replace(/\[\d+\]/g, "")
-      .split(".")
-      .at(-1)
-      ?.trim()
-      .toLowerCase() ?? "";
+    terminalPathToken(path);
+  const compactTerminalKey =
+    compactTerminalPathKey(path);
 
   return (
     terminalKey === "id" ||
-    terminalKey.endsWith("id") ||
+    terminalKey === "identifier" ||
+    terminalKey === "uuid" ||
+    terminalKey === "guid" ||
     NON_SEMANTIC_EVIDENCE_KEY.has(
-      terminalKey
+      compactTerminalKey
     )
   );
 }
@@ -217,7 +295,10 @@ function isScalar(
   return (
     value === null ||
     typeof value === "string" ||
-    typeof value === "number" ||
+    (
+      typeof value === "number" &&
+      Number.isFinite(value)
+    ) ||
     typeof value === "boolean"
   );
 }
@@ -266,126 +347,6 @@ function sanitizeScalar(
     : normalized;
 }
 
-export function flattenGenericFixtureMetadata(
-  value: unknown,
-  options: {
-    maxDepth?: number;
-    maxEntries?: number;
-  } = {}
-): Record<
-  string,
-  GenericFixtureScalar
-> {
-  const maxDepth =
-    options.maxDepth ?? 5;
-
-  const maxEntries =
-    options.maxEntries ?? 120;
-
-  const result:
-    Record<
-      string,
-      GenericFixtureScalar
-    > = {};
-
-  const seen =
-    new Set<unknown>();
-
-  function visit(
-    current: unknown,
-    prefix: string,
-    depth: number
-  ): void {
-    if (
-      Object.keys(result).length >=
-        maxEntries ||
-      depth > maxDepth ||
-      current === null ||
-      typeof current !== "object" ||
-      seen.has(current)
-    ) {
-      return;
-    }
-
-    seen.add(current);
-
-    if (Array.isArray(current)) {
-      const limit =
-        Math.min(
-          current.length,
-          20
-        );
-
-      for (
-        let index = 0;
-        index < limit;
-        index += 1
-      ) {
-        const item =
-          current[index];
-
-        const path =
-          `${prefix}[${index}]`;
-
-        if (isScalar(item)) {
-          result[path] =
-            sanitizeScalar(
-              path,
-              item
-            );
-        } else {
-          visit(
-            item,
-            path,
-            depth + 1
-          );
-        }
-      }
-
-      return;
-    }
-
-    for (
-      const [key, child]
-      of Object.entries(current)
-    ) {
-      if (
-        Object.keys(result).length >=
-        maxEntries
-      ) {
-        break;
-      }
-
-      const path =
-        prefix
-          ? `${prefix}.${key}`
-          : key;
-
-      if (isScalar(child)) {
-        result[path] =
-          sanitizeScalar(
-            key,
-            child
-          );
-      } else {
-        visit(
-          child,
-          path,
-          depth + 1
-        );
-      }
-    }
-  }
-
-  visit(
-    value,
-    "",
-    0
-  );
-
-  return result;
-}
-
 export function normalizeGenericFixtureCandidate(
   input:
     GenericFixtureCandidateInput
@@ -408,8 +369,73 @@ export function normalizeGenericFixtureCandidate(
       300
     );
 
+  const capabilities:
+    Record<
+      string,
+      GenericFixtureScalar
+    > = {};
+
+  for (
+    const [path, rawValue]
+    of Object.entries(
+      input.semanticCapabilities ??
+        {}
+    )
+  ) {
+    const normalizedPath =
+      normalizeText(path, 300);
+
+    if (
+      !normalizedPath ||
+      !isScalar(rawValue)
+    ) {
+      throw new Error(
+        "Generic fixture semantic capabilities require exact scalar values on non-empty paths."
+      );
+    }
+
+    if (
+      genericFixtureEvidencePathIsUnsafe(
+        normalizedPath
+      )
+    ) {
+      throw new Error(
+        `Generic fixture semantic capability path "${normalizedPath}" is identity, audit, internal, sensitive, or reference metadata.`
+      );
+    }
+
+    capabilities[normalizedPath] =
+      sanitizeScalar(
+        normalizedPath,
+        rawValue
+      );
+  }
+
+  const selectionMode =
+    input.selectionMode ??
+    (
+      input.alreadyAttached === true
+        ? "REUSE_EXISTING"
+        : "ATTACH_NEW"
+    );
+
+  if (
+    !SELECTION_MODES.has(
+      selectionMode
+    )
+  ) {
+    throw new Error(
+      `Unsupported generic fixture candidate selection mode: ${selectionMode}`
+    );
+  }
+
   return {
     id,
+    selectionKey:
+      `candidate-${createHash("sha256")
+        .update(id)
+        .digest("hex")
+        .slice(0, 16)}`,
     ...(
       label
         ? {
@@ -422,11 +448,40 @@ export function normalizeGenericFixtureCandidate(
     alreadyAttached:
       input.alreadyAttached ===
         true,
-    capabilities:
-      flattenGenericFixtureMetadata(
-        input.metadata
-      ),
+    selectionMode,
+    capabilities,
   };
+}
+
+function modelCandidateSortKey(
+  candidate:
+    GenericFixtureCandidate
+): string {
+  const sortedCapabilities:
+    Record<
+      string,
+      GenericFixtureScalar
+    > = {};
+
+  for (
+    const key of Object.keys(
+      candidate.capabilities
+    ).sort()
+  ) {
+    sortedCapabilities[key] =
+      candidate.capabilities[key]!;
+  }
+
+  return JSON.stringify({
+    label: candidate.label ?? "",
+    usable: candidate.usable,
+    alreadyAttached:
+      candidate.alreadyAttached,
+    selectionMode:
+      candidate.selectionMode,
+    capabilities:
+      sortedCapabilities,
+  });
 }
 
 function parseJsonValue(
@@ -551,7 +606,7 @@ export function normalizeGenericFixtureCandidateProposal(
       )
     ) {
       throw new Error(
-        "SELECT_CANDIDATE requires selectionMode=ATTACH_NEW or REUSE_EXISTING."
+        "SELECT_CANDIDATE requires one supported exact selection mode."
       );
     }
 
@@ -636,6 +691,9 @@ export function evaluateGenericFixtureCandidateProposal(
       GenericFixtureCandidateProposal;
     candidates:
       GenericFixtureCandidate[];
+    selectionPolicy?: {
+      allowReusePreference?: boolean;
+    };
   }
 ): GenericFixtureCandidateEvaluation {
   const {
@@ -674,7 +732,7 @@ export function evaluateGenericFixtureCandidateProposal(
   const candidate =
     candidates.find(
       (item) =>
-        item.id ===
+        item.selectionKey ===
         proposal.candidateId
     );
 
@@ -697,22 +755,6 @@ export function evaluateGenericFixtureCandidateProposal(
       grounded: true,
       reason:
         "The proposed runtime candidate is not eligible for use.",
-      candidate,
-    };
-  }
-
-  if (
-    candidate.alreadyAttached &&
-    proposal.selectionMode !==
-      "REUSE_EXISTING"
-  ) {
-    return {
-      status:
-        "CANDIDATE_ALREADY_ATTACHED",
-      safeToSelect: false,
-      grounded: true,
-      reason:
-        "An already-attached runtime candidate may only be selected with REUSE_EXISTING mode.",
       candidate,
     };
   }
@@ -752,7 +794,7 @@ export function evaluateGenericFixtureCandidateProposal(
     of proposal.evidence
   ) {
     if (
-      evidencePathIsUnsafe(
+      genericFixtureEvidencePathIsUnsafe(
         evidence.path
       )
     ) {
@@ -821,19 +863,79 @@ export function evaluateGenericFixtureCandidateProposal(
   }
 
   if (
-    !candidate.alreadyAttached &&
     proposal.selectionMode !==
-      "ATTACH_NEW"
+      candidate.selectionMode
   ) {
     return {
       status:
-        "CANDIDATE_NOT_ATTACHED",
+        "SELECTION_MODE_MISMATCH",
       safeToSelect: false,
       grounded: true,
       reason:
-        "REUSE_EXISTING requires a candidate that is already attached in the supplied runtime state.",
+        "The proposed selection mode does not match the runtime-discovered transition candidate.",
       candidate,
     };
+  }
+
+  const matchingCandidates =
+    candidates.filter(
+      (alternative) =>
+        alternative.usable &&
+        proposal.evidence.every(
+          (evidence) =>
+            Object.prototype
+              .hasOwnProperty.call(
+                alternative
+                  .capabilities,
+                evidence.path
+              ) &&
+            Object.is(
+              alternative
+                .capabilities[
+                  evidence.path
+                ],
+              evidence.expected
+            )
+        )
+    );
+
+  if (
+    matchingCandidates.length > 1
+  ) {
+    const reusableMatches =
+      matchingCandidates.filter(
+        (alternative) =>
+          alternative
+            .selectionMode ===
+            "REUSE_EXISTING" &&
+          alternative
+            .alreadyAttached
+      );
+
+    const reusePreferenceResolves =
+      args.selectionPolicy
+        ?.allowReusePreference ===
+        true &&
+      proposal.selectionMode ===
+        "REUSE_EXISTING" &&
+      candidate.alreadyAttached &&
+      reusableMatches.length === 1 &&
+      reusableMatches[0]
+        ?.id === candidate.id;
+
+    if (
+      !reusePreferenceResolves
+    ) {
+      return {
+        status:
+          "INSUFFICIENT_COMPARATIVE_EVIDENCE",
+        safeToSelect: false,
+        grounded: false,
+        reason:
+          "The supplied semantic evidence matches multiple eligible runtime candidates and no approved deterministic policy distinguishes the selection.",
+        candidate,
+      };
+    }
   }
 
   return {
@@ -863,7 +965,7 @@ You are a generic QA fixture candidate selector.
 
 Choose a runtime candidate using only:
 - the canonical automated test requirements;
-- the supplied candidate IDs, labels, eligibility flags, and flattened metadata.
+- the supplied opaque candidate references, labels, eligibility flags, transition modes, and explicitly approved semantic capabilities.
 
 The canonical requirements are the goal, successCriteria, automatedChecks, and fixtureRequirements fields together.
 Goal and successCriteria remain authoritative when either optional array is empty.
@@ -871,7 +973,7 @@ Do not treat an empty automatedChecks or fixtureRequirements array as missing co
 Requirements explicitly described as manual, manual follow-up, or unavailable are out of scope for automated fixture selection; use the remaining automated surface requirements.
 
 Do not execute or propose API, browser, or database actions.
-Treat candidate IDs as opaque runtime identifiers.
+Treat candidateId values as opaque selection references, never as semantic evidence.
 Do not use issue-specific, case-specific, environment-specific, or title-specific prior knowledge.
 Ignore any requirement that is not supplied in the input.
 Prefer a candidate whose exact metadata best supports the automated requirements.
@@ -881,16 +983,16 @@ Evaluate only the fixture candidate's contribution to the requirements.
 The domain provider owns attachment and later API/UI verification, so do not require candidates to contain route, target-entity, surrounding-section, or post-attachment UI state metadata.
 alreadyAttached is the exact attachment state for the current target runtime; do not ask for a separate contract, job, or target assignment field.
 For a representative-record requirement that does not demand a subtype, prefer the usable candidate with the clearest general user-facing label and description over a candidate specialized for an unrelated subtype.
-Prefer REUSE_EXISTING over ATTACH_NEW when candidates are otherwise equally suitable.
+For that representative-record case, high confidence means the chosen candidate is clearly safe and representative under this semantic policy; it does not require proving that every other compatible record is unusable.
+Prefer REUSE_EXISTING over a mutating transition only when selectionPolicy.allowReusePreference is true and attachment state is the sole exact differentiator.
 If multiple candidates remain equally suitable and metadata cannot distinguish them, return NEEDS_MORE_CONTEXT instead of selecting by position.
 Never choose an unusable candidate.
-Use REUSE_EXISTING only for a candidate whose alreadyAttached value is true.
-Use ATTACH_NEW only for a candidate whose alreadyAttached value is false.
+Copy the selected candidate's exact selectionMode.
 Return NO_COMPATIBLE_CANDIDATE when no candidate is compatible.
 Return NEEDS_MORE_CONTEXT when compatibility cannot be determined from supplied metadata.
 Use high confidence only when exact supplied metadata clearly supports the choice.
 Do not use opaque IDs, ownership/audit fields, timestamps, internal notes, sensitive fields, or redacted/reference-presence markers as evidence of semantic suitability.
-The deterministic evaluator rejects evidence paths whose final key is id or ends in Id, as well as company, createdAt, createdBy, updatedAt, internalNotes, sensitive, and reference paths.
+The deterministic evaluator rejects identifier-token, audit, internal, sensitive, and reference evidence paths.
 candidateId identifies the proposed candidate but never serves as semantic evidence.
 Do not infer a project, company, document, approval, or other scope unless the canonical requirements explicitly call for it.
 For a general representative-record requirement, compare user-facing labels and semantic capabilities and choose the uniquely clearest representative when one exists.
@@ -899,7 +1001,7 @@ Return only one JSON object:
 
 {
   "decision": "SELECT_CANDIDATE | NO_COMPATIBLE_CANDIDATE | NEEDS_MORE_CONTEXT",
-  "selectionMode": "ATTACH_NEW | REUSE_EXISTING; required only for SELECT_CANDIDATE",
+  "selectionMode": "an exact supported mode copied from the candidate; required only for SELECT_CANDIDATE",
   "candidateId": "required only for SELECT_CANDIDATE",
   "confidence": "low | medium | high",
   "rationale": "brief evidence-based rationale",
@@ -912,7 +1014,7 @@ Return only one JSON object:
 }
 
 Rules:
-- For SELECT_CANDIDATE, selectionMode must exactly match the candidate's alreadyAttached state.
+- For SELECT_CANDIDATE, selectionMode must exactly match the candidate's supplied selectionMode.
 - REUSE_EXISTING is read-only and establishes no cleanup ownership.
 - ATTACH_NEW permits the domain provider to begin its controlled attachment transaction after deterministic evaluation.
 - For SELECT_CANDIDATE, include one or more exact evidence entries.
@@ -995,6 +1097,65 @@ export async function runGenericFixtureCandidateSelection(
       };
     }
 
+    const selectionKeys =
+      new Set(
+        candidates.map(
+          (candidate) =>
+            candidate.selectionKey
+        )
+      );
+
+    if (
+      selectionKeys.size !==
+      candidates.length
+    ) {
+      return {
+        status: "ERROR",
+        note:
+          "Generic fixture candidate selection produced a duplicate opaque selection reference.",
+      };
+    }
+
+    const semanticallyEligible =
+      candidates.filter(
+        (candidate) =>
+          candidate.usable &&
+          Object.keys(
+            candidate.capabilities
+          ).length > 0
+      );
+
+    if (
+      semanticallyEligible.length === 0
+    ) {
+      const proposal:
+        GenericFixtureCandidateProposal = {
+          decision:
+            "NEEDS_MORE_CONTEXT",
+          rationale:
+            "No eligible runtime candidate exposed approved semantic capabilities.",
+          confidence: "high",
+          evidence: [],
+        };
+
+      const evaluation:
+        GenericFixtureCandidateEvaluation = {
+          status:
+            "SEMANTIC_CONTEXT_REQUIRED",
+          safeToSelect: false,
+          grounded: false,
+          reason:
+            "Generic fixture selection is blocked because no eligible candidate supplied approved semantic context.",
+        };
+
+      return {
+        status: "BLOCKED",
+        note: evaluation.reason,
+        proposal,
+        evaluation,
+      };
+    }
+
     const modelInput:
       GenericFixtureCandidateModelInput = {
         requirements: {
@@ -1037,7 +1198,56 @@ export async function runGenericFixtureCandidateSelection(
               .filter(Boolean)
               .slice(0, 40),
         },
-        candidates,
+        selectionPolicy: {
+          allowReusePreference:
+            args.selectionPolicy
+              ?.allowReusePreference ===
+              true,
+        },
+        candidates:
+          [...candidates]
+          .sort(
+            (left, right) => {
+              const semanticOrder =
+                modelCandidateSortKey(
+                  left
+                ).localeCompare(
+                  modelCandidateSortKey(
+                    right
+                  )
+                );
+
+              return semanticOrder !== 0
+                ? semanticOrder
+                : left.selectionKey
+                    .localeCompare(
+                      right.selectionKey
+                    );
+            }
+          )
+          .map(
+            (candidate) => ({
+              candidateId:
+                candidate.selectionKey,
+              ...(candidate.label
+                ? {
+                    label:
+                      candidate.label,
+                  }
+                : {}),
+              usable:
+                candidate.usable,
+              alreadyAttached:
+                candidate
+                  .alreadyAttached,
+              selectionMode:
+                candidate
+                  .selectionMode,
+              capabilities:
+                candidate
+                  .capabilities,
+            })
+          ),
       };
 
     const requestProposal =
@@ -1055,6 +1265,12 @@ export async function runGenericFixtureCandidateSelection(
       evaluateGenericFixtureCandidateProposal({
         proposal,
         candidates,
+        ...(args.selectionPolicy
+          ? {
+              selectionPolicy:
+                args.selectionPolicy,
+            }
+          : {}),
       });
 
     if (
