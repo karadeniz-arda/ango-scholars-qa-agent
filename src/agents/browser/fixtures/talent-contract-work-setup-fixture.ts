@@ -13,6 +13,7 @@ import type {
 import {
   apiGet,
   extractItems,
+  getCachedBrowserExecutionContext,
   getFirebaseIdToken,
 } from "../browser-route-execution-context.js";
 import type {
@@ -40,6 +41,11 @@ export type TalentContractWorkSetupFixtureDependencies = {
   getToken: (
     persona: BrowserPersona
   ) => Promise<string>;
+
+  getExecutionContext?: (
+    persona: BrowserPersona,
+    providedContext: any
+  ) => Promise<any>;
 
   getJson: (
     apiUrl: string,
@@ -392,6 +398,9 @@ const defaultDependencies:
     getToken:
       getFirebaseIdToken,
 
+    getExecutionContext:
+      getCachedBrowserExecutionContext,
+
     getJson:
       apiGet,
 
@@ -622,9 +631,29 @@ export function createTalentContractWorkSetupFixtureProvider(
           );
         }
 
-        const companyId =
+        const providedCompanyId =
           normalizeId(
             runtimeResourceContext
+              ?.companyId
+          );
+
+        const companyExecutionContext =
+          providedCompanyId
+            ? undefined
+            : await (
+                dependencies
+                  .getExecutionContext ??
+                getCachedBrowserExecutionContext
+              )(
+                "company_admin",
+                runtimeResourceContext ??
+                  {}
+              );
+
+        const companyId =
+          providedCompanyId ??
+          normalizeId(
+            companyExecutionContext
               ?.companyId
           );
 
