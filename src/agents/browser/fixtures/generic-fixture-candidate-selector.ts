@@ -46,12 +46,18 @@ export type GenericFixtureCandidateConfidence =
   | "medium"
   | "high";
 
+export type GenericFixtureCandidateSelectionMode =
+  | "ATTACH_NEW"
+  | "REUSE_EXISTING";
+
 export type GenericFixtureCandidateProposal = {
   decision:
     GenericFixtureCandidateDecision;
   rationale: string;
   confidence:
     GenericFixtureCandidateConfidence;
+  selectionMode?:
+    GenericFixtureCandidateSelectionMode;
   candidateId?: string;
   evidence:
     GenericFixtureCandidateEvidence[];
@@ -77,8 +83,11 @@ export type GenericFixtureCandidateEvaluationStatus =
   | "CANDIDATE_NOT_FOUND"
   | "CANDIDATE_UNUSABLE"
   | "CANDIDATE_ALREADY_ATTACHED"
+  | "CANDIDATE_NOT_ATTACHED"
+  | "SELECTION_MODE_REQUIRED"
   | "LOW_CONFIDENCE"
   | "EVIDENCE_REQUIRED"
+  | "EVIDENCE_PATH_UNSAFE"
   | "EVIDENCE_NOT_GROUNDED"
   | "EVIDENCE_VALUE_MISMATCH";
 
@@ -141,11 +150,55 @@ const CONFIDENCES =
     "high",
   ]);
 
+const SELECTION_MODES =
+  new Set<
+    GenericFixtureCandidateSelectionMode
+  >([
+    "ATTACH_NEW",
+    "REUSE_EXISTING",
+  ]);
+
 const SECRET_KEY =
   /token|secret|password|credential|authorization|cookie/i;
 
 const REFERENCE_KEY =
   /url|signed|download|documentPath|filePath/i;
+
+const NON_SEMANTIC_EVIDENCE_KEY =
+  new Set([
+    "company",
+    "createdat",
+    "createdby",
+    "internalnotes",
+    "updatedat",
+  ]);
+
+function evidencePathIsUnsafe(
+  path: string
+): boolean {
+  if (
+    SECRET_KEY.test(path) ||
+    REFERENCE_KEY.test(path)
+  ) {
+    return true;
+  }
+
+  const terminalKey =
+    path
+      .replace(/\[\d+\]/g, "")
+      .split(".")
+      .at(-1)
+      ?.trim()
+      .toLowerCase() ?? "";
+
+  return (
+    terminalKey === "id" ||
+    terminalKey.endsWith("id") ||
+    NON_SEMANTIC_EVIDENCE_KEY.has(
+      terminalKey
+    )
+  );
+}
 
 function isRecord(
   value: unknown
@@ -477,6 +530,40 @@ export function normalizeGenericFixtureCandidateProposal(
     );
   }
 
+  const rawSelectionMode =
+    normalizeText(
+      parsed.selectionMode,
+      40
+    ).toUpperCase();
+
+  let selectionMode:
+    GenericFixtureCandidateSelectionMode |
+    undefined;
+
+  if (
+    decision ===
+      "SELECT_CANDIDATE"
+  ) {
+    if (
+      !SELECTION_MODES.has(
+        rawSelectionMode as
+          GenericFixtureCandidateSelectionMode
+      )
+    ) {
+      throw new Error(
+        "SELECT_CANDIDATE requires selectionMode=ATTACH_NEW or REUSE_EXISTING."
+      );
+    }
+
+    selectionMode =
+      rawSelectionMode as
+        GenericFixtureCandidateSelectionMode;
+  } else if (rawSelectionMode) {
+    throw new Error(
+      "selectionMode is only valid for SELECT_CANDIDATE."
+    );
+  }
+
   const rawEvidence =
     Array.isArray(
       parsed.evidence
@@ -525,6 +612,13 @@ export function normalizeGenericFixtureCandidateProposal(
     decision,
     rationale,
     confidence,
+    ...(
+      selectionMode
+        ? {
+            selectionMode,
+          }
+        : {}
+    ),
     ...(
       candidateId
         ? {
@@ -608,7 +702,9 @@ export function evaluateGenericFixtureCandidateProposal(
   }
 
   if (
-    candidate.alreadyAttached
+    candidate.alreadyAttached &&
+    proposal.selectionMode !==
+      "REUSE_EXISTING"
   ) {
     return {
       status:
@@ -616,7 +712,7 @@ export function evaluateGenericFixtureCandidateProposal(
       safeToSelect: false,
       grounded: true,
       reason:
-        "The proposed runtime candidate is already attached and cannot establish provider ownership.",
+        "An already-attached runtime candidate may only be selected with REUSE_EXISTING mode.",
       candidate,
     };
   }
@@ -655,6 +751,22 @@ export function evaluateGenericFixtureCandidateProposal(
     const evidence
     of proposal.evidence
   ) {
+    if (
+      evidencePathIsUnsafe(
+        evidence.path
+      )
+    ) {
+      return {
+        status:
+          "EVIDENCE_PATH_UNSAFE",
+        safeToSelect: false,
+        grounded: false,
+        reason:
+          `The proposed evidence path "${evidence.path}" is identity, audit, internal, sensitive, or reference metadata and cannot establish semantic fixture suitability.`,
+        candidate,
+      };
+    }
+
     if (
       !Object.prototype
         .hasOwnProperty.call(
@@ -696,13 +808,41 @@ export function evaluateGenericFixtureCandidateProposal(
     }
   }
 
+  if (!proposal.selectionMode) {
+    return {
+      status:
+        "SELECTION_MODE_REQUIRED",
+      safeToSelect: false,
+      grounded: true,
+      reason:
+        "Controlled fixture selection requires an explicit selection mode.",
+      candidate,
+    };
+  }
+
+  if (
+    !candidate.alreadyAttached &&
+    proposal.selectionMode !==
+      "ATTACH_NEW"
+  ) {
+    return {
+      status:
+        "CANDIDATE_NOT_ATTACHED",
+      safeToSelect: false,
+      grounded: true,
+      reason:
+        "REUSE_EXISTING requires a candidate that is already attached in the supplied runtime state.",
+      candidate,
+    };
+  }
+
   return {
     status:
       "SAFE_TO_SELECT",
     safeToSelect: true,
     grounded: true,
     reason:
-      "The model-selected candidate is exact, usable, unattached, high-confidence, and grounded by runtime metadata.",
+      "The model-selected candidate is exact, usable, high-confidence, grounded by runtime metadata, and consistent with the requested selection mode.",
     candidate,
   };
 }
@@ -725,20 +865,41 @@ Choose a runtime candidate using only:
 - the canonical automated test requirements;
 - the supplied candidate IDs, labels, eligibility flags, and flattened metadata.
 
+The canonical requirements are the goal, successCriteria, automatedChecks, and fixtureRequirements fields together.
+Goal and successCriteria remain authoritative when either optional array is empty.
+Do not treat an empty automatedChecks or fixtureRequirements array as missing context by itself.
+Requirements explicitly described as manual, manual follow-up, or unavailable are out of scope for automated fixture selection; use the remaining automated surface requirements.
+
 Do not execute or propose API, browser, or database actions.
 Treat candidate IDs as opaque runtime identifiers.
 Do not use issue-specific, case-specific, environment-specific, or title-specific prior knowledge.
 Ignore any requirement that is not supplied in the input.
 Prefer a candidate whose exact metadata best supports the automated requirements.
-Never choose an unusable or already-attached candidate.
+Compare every candidate independently; array order conveys no preference.
+When a requirement only needs a representative usable record to render the asserted surface, select the candidate whose semantic metadata best demonstrates that surface.
+Evaluate only the fixture candidate's contribution to the requirements.
+The domain provider owns attachment and later API/UI verification, so do not require candidates to contain route, target-entity, surrounding-section, or post-attachment UI state metadata.
+alreadyAttached is the exact attachment state for the current target runtime; do not ask for a separate contract, job, or target assignment field.
+For a representative-record requirement that does not demand a subtype, prefer the usable candidate with the clearest general user-facing label and description over a candidate specialized for an unrelated subtype.
+Prefer REUSE_EXISTING over ATTACH_NEW when candidates are otherwise equally suitable.
+If multiple candidates remain equally suitable and metadata cannot distinguish them, return NEEDS_MORE_CONTEXT instead of selecting by position.
+Never choose an unusable candidate.
+Use REUSE_EXISTING only for a candidate whose alreadyAttached value is true.
+Use ATTACH_NEW only for a candidate whose alreadyAttached value is false.
 Return NO_COMPATIBLE_CANDIDATE when no candidate is compatible.
 Return NEEDS_MORE_CONTEXT when compatibility cannot be determined from supplied metadata.
 Use high confidence only when exact supplied metadata clearly supports the choice.
+Do not use opaque IDs, ownership/audit fields, timestamps, internal notes, sensitive fields, or redacted/reference-presence markers as evidence of semantic suitability.
+The deterministic evaluator rejects evidence paths whose final key is id or ends in Id, as well as company, createdAt, createdBy, updatedAt, internalNotes, sensitive, and reference paths.
+candidateId identifies the proposed candidate but never serves as semantic evidence.
+Do not infer a project, company, document, approval, or other scope unless the canonical requirements explicitly call for it.
+For a general representative-record requirement, compare user-facing labels and semantic capabilities and choose the uniquely clearest representative when one exists.
 
 Return only one JSON object:
 
 {
   "decision": "SELECT_CANDIDATE | NO_COMPATIBLE_CANDIDATE | NEEDS_MORE_CONTEXT",
+  "selectionMode": "ATTACH_NEW | REUSE_EXISTING; required only for SELECT_CANDIDATE",
   "candidateId": "required only for SELECT_CANDIDATE",
   "confidence": "low | medium | high",
   "rationale": "brief evidence-based rationale",
@@ -751,11 +912,17 @@ Return only one JSON object:
 }
 
 Rules:
+- For SELECT_CANDIDATE, selectionMode must exactly match the candidate's alreadyAttached state.
+- REUSE_EXISTING is read-only and establishes no cleanup ownership.
+- ATTACH_NEW permits the domain provider to begin its controlled attachment transaction after deterministic evaluation.
 - For SELECT_CANDIDATE, include one or more exact evidence entries.
 - Evidence paths and values must be copied exactly from the selected candidate.
 - Do not invent fields, IDs, values, or requirements.
 - Do not include markdown.
 `.trim();
+
+  const reasoningOptions =
+    getReasoningOptions();
 
   const response =
     await ollamaClient
@@ -769,7 +936,15 @@ Rules:
             .QA_GENERIC_BROWSER_MODEL ||
           process.env.OLLAMA_MODEL ||
           "gpt-4o-mini",
-        ...getReasoningOptions(),
+        ...(
+          Object.keys(
+            reasoningOptions
+          ).length > 0
+            ? reasoningOptions
+            : {
+                temperature: 0,
+              }
+        ),
         response_format: {
           type: "json_object",
         },

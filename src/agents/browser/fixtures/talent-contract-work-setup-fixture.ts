@@ -24,6 +24,18 @@ import type {
 import {
   getRuntimeTalentContractFixture,
 } from "./talent-contract-fixture-context.js";
+import {
+  runGenericFixtureCandidateSelection,
+} from "./generic-fixture-candidate-selector.js";
+import type {
+  GenericFixtureCandidateEvaluation,
+  GenericFixtureCandidateEvaluationStatus,
+  GenericFixtureCandidateInput,
+  GenericFixtureCandidateProposal,
+  GenericFixtureCandidateRequestProposal,
+  GenericFixtureCandidateSelectionMode,
+  GenericFixtureRequirementContext,
+} from "./generic-fixture-candidate-selector.js";
 
 type WorkSetupMutationMethod =
   | "POST"
@@ -66,6 +78,12 @@ export type TalentContractWorkSetupFixtureDependencies = {
     providedContext: any
   ) => Promise<any>;
 
+  selectCandidate:
+    typeof runGenericFixtureCandidateSelection;
+
+  requestCandidateProposal?:
+    GenericFixtureCandidateRequestProposal;
+
   getJson: (
     apiUrl: string,
     path: string,
@@ -107,6 +125,146 @@ export type SafeWorkSetupCandidateSelection =
       companyCount: number;
       visibleCount: number;
     };
+
+export type WorkSetupRuntimeCandidateAdapterResult =
+  | {
+      status: "READY";
+      candidates:
+        GenericFixtureCandidateInput[];
+      companyCount: number;
+      visibleCount: number;
+    }
+  | {
+      status: "BLOCKED";
+      reason: string;
+      companyCount: number;
+      visibleCount: number;
+    };
+
+export type WorkSetupFixtureCandidateDecision =
+  | {
+      status: "REUSE_EXISTING";
+      workSetupId: string;
+      workSetupTitle?: string;
+      candidateCount: number;
+      visibleRecordCount: number;
+      proposal:
+        GenericFixtureCandidateProposal;
+      evaluation:
+        GenericFixtureCandidateEvaluation;
+    }
+  | {
+      status: "ATTACH_NEW";
+      workSetupId: string;
+      workSetupTitle?: string;
+      candidateCount: number;
+      visibleRecordCount: number;
+      proposal:
+        GenericFixtureCandidateProposal;
+      evaluation:
+        GenericFixtureCandidateEvaluation;
+    }
+  | {
+      status: "BLOCKED";
+      reason: string;
+      candidateCount?: number;
+      companyRecordCount?: number;
+      visibleRecordCount?: number;
+      evaluationStatus?:
+        GenericFixtureCandidateEvaluationStatus;
+      proposal?:
+        GenericFixtureCandidateProposal;
+      evaluation?:
+        GenericFixtureCandidateEvaluation;
+    }
+  | {
+      status: "ERROR";
+      reason: string;
+    };
+
+export type ResolveWorkSetupFixtureCandidateDecisionArgs = {
+  testCase: any;
+  companyData: unknown;
+  visibleTalentData: unknown;
+  selectCandidate:
+    typeof runGenericFixtureCandidateSelection;
+  requestCandidateProposal?:
+    GenericFixtureCandidateRequestProposal;
+};
+
+function normalizeWorkSetupFixtureRequirementText(
+  value: unknown,
+  maxLength: number
+): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function normalizeWorkSetupFixtureRequirementArray(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const result: string[] = [];
+  const seen =
+    new Set<string>();
+
+  for (const item of value) {
+    const normalized =
+      normalizeWorkSetupFixtureRequirementText(
+        item,
+        2000
+      );
+
+    if (
+      !normalized ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(normalized);
+
+    if (result.length >= 40) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+export function buildWorkSetupFixtureRequirementContext(
+  testCase: any
+): GenericFixtureRequirementContext {
+  return {
+    goal:
+      normalizeWorkSetupFixtureRequirementText(
+        testCase?.goal,
+        2000
+      ),
+
+    successCriteria:
+      normalizeWorkSetupFixtureRequirementText(
+        testCase?.successCriteria,
+        4000
+      ),
+
+    automatedChecks:
+      normalizeWorkSetupFixtureRequirementArray(
+        testCase?.automatedChecks
+      ),
+
+    fixtureRequirements:
+      normalizeWorkSetupFixtureRequirementArray(
+        testCase?.fixtureRequirements
+      ),
+  };
+}
 
 function normalizeId(
   value: unknown
@@ -212,6 +370,396 @@ function workSetupCandidateIsUsable(
     "deleted",
     "inactive",
   ].includes(status);
+}
+
+export function adaptWorkSetupRuntimeCandidates(
+  companyData: unknown,
+  visibleTalentData: unknown
+): WorkSetupRuntimeCandidateAdapterResult {
+  const companyItems =
+    extractItems(companyData);
+
+  const visibleItems =
+    extractItems(
+      visibleTalentData
+    );
+
+  const visibleIds =
+    new Set<string>();
+
+  for (
+    const item
+    of visibleItems
+  ) {
+    const workSetupId =
+      getVisibleTalentWorkSetupId(
+        item
+      );
+
+    if (!workSetupId) {
+      return {
+        status: "BLOCKED",
+        reason:
+          "Existing talent Work Setup records could not be mapped to exact Work Setup IDs, so candidate ownership is unsafe.",
+        companyCount:
+          companyItems.length,
+        visibleCount:
+          visibleItems.length,
+      };
+    }
+
+    visibleIds.add(
+      workSetupId
+    );
+  }
+
+  const candidateIds =
+    new Set<string>();
+
+  const candidates:
+    GenericFixtureCandidateInput[] = [];
+
+  let unidentifiedCompanyCount =
+    0;
+
+  for (
+    const item
+    of companyItems
+  ) {
+    const workSetupId =
+      getCompanyWorkSetupId(
+        item
+      );
+
+    if (!workSetupId) {
+      unidentifiedCompanyCount +=
+        1;
+      continue;
+    }
+
+    if (
+      candidateIds.has(
+        workSetupId
+      )
+    ) {
+      return {
+        status: "BLOCKED",
+        reason:
+          "Duplicate company Work Setup records shared the same exact Work Setup ID, so candidate metadata is ambiguous.",
+        companyCount:
+          companyItems.length,
+        visibleCount:
+          visibleItems.length,
+      };
+    }
+
+    candidateIds.add(
+      workSetupId
+    );
+
+    const workSetupTitle =
+      getWorkSetupTitle(
+        item
+      );
+
+    candidates.push({
+      id: workSetupId,
+      ...(
+        workSetupTitle
+          ? {
+              label:
+                workSetupTitle,
+            }
+          : {}
+      ),
+      usable:
+        workSetupCandidateIsUsable(
+          item
+        ),
+      alreadyAttached:
+        visibleIds.has(
+          workSetupId
+        ),
+      metadata: item,
+    });
+  }
+
+  if (
+    candidates.length === 0
+  ) {
+    return {
+      status: "BLOCKED",
+      reason:
+        `No company Work Setup candidate with an exact ID could be constructed; unidentifiedCompanyCount=${unidentifiedCompanyCount}.`,
+      companyCount:
+        companyItems.length,
+      visibleCount:
+        visibleItems.length,
+    };
+  }
+
+  return {
+    status: "READY",
+    candidates,
+    companyCount:
+      companyItems.length,
+    visibleCount:
+      visibleItems.length,
+  };
+}
+
+function isGenericFixtureCandidateSelectionMode(
+  value: unknown
+): value is
+  GenericFixtureCandidateSelectionMode {
+  return (
+    value === "REUSE_EXISTING" ||
+    value === "ATTACH_NEW"
+  );
+}
+
+export async function resolveWorkSetupFixtureCandidateDecision(
+  args:
+    ResolveWorkSetupFixtureCandidateDecisionArgs
+): Promise<
+  WorkSetupFixtureCandidateDecision
+> {
+  try {
+    const requirements =
+      buildWorkSetupFixtureRequirementContext(
+        args.testCase
+      );
+
+    const runtimeCandidates =
+      adaptWorkSetupRuntimeCandidates(
+        args.companyData,
+        args.visibleTalentData
+      );
+
+    if (
+      runtimeCandidates.status ===
+      "BLOCKED"
+    ) {
+      return {
+        status: "BLOCKED",
+        reason:
+          runtimeCandidates.reason,
+        companyRecordCount:
+          runtimeCandidates
+            .companyCount,
+        visibleRecordCount:
+          runtimeCandidates
+            .visibleCount,
+      };
+    }
+
+    const selectionResult =
+      await args.selectCandidate({
+        requirements,
+        candidates:
+          runtimeCandidates.candidates,
+        ...(
+          args.requestCandidateProposal
+            ? {
+                requestProposal:
+                  args.requestCandidateProposal,
+              }
+            : {}
+        ),
+      });
+
+    if (
+      selectionResult.status ===
+      "ERROR"
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          selectionResult.note,
+      };
+    }
+
+    if (
+      selectionResult.status ===
+      "BLOCKED"
+    ) {
+      return {
+        status: "BLOCKED",
+        reason:
+          selectionResult
+            .evaluation.reason,
+        candidateCount:
+          runtimeCandidates
+            .candidates.length,
+        visibleRecordCount:
+          runtimeCandidates
+            .visibleCount,
+        evaluationStatus:
+          selectionResult
+            .evaluation.status,
+        proposal:
+          selectionResult.proposal,
+        evaluation:
+          selectionResult.evaluation,
+      };
+    }
+
+    if (
+      selectionResult.evaluation
+        .status !==
+        "SAFE_TO_SELECT" ||
+      selectionResult.evaluation
+        .safeToSelect !== true ||
+      selectionResult.evaluation
+        .grounded !== true
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate did not include a safe grounded selector evaluation.",
+      };
+    }
+
+    const selectionMode =
+      selectionResult
+        .proposal.selectionMode;
+
+    if (
+      !isGenericFixtureCandidateSelectionMode(
+        selectionMode
+      )
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate did not include a supported selection mode.",
+      };
+    }
+
+    const selectedCandidateId =
+      selectionResult.candidate.id;
+
+    if (
+      !selectedCandidateId ||
+      selectionResult
+        .proposal.candidateId !==
+        selectedCandidateId ||
+      (
+        selectionResult
+          .evaluation.candidate &&
+        selectionResult
+          .evaluation.candidate.id !==
+          selectedCandidateId
+      )
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate ID did not match the proposal candidate ID.",
+      };
+    }
+
+    const adaptedCandidate =
+      runtimeCandidates.candidates
+        .find(
+          (candidate) =>
+            candidate.id ===
+            selectedCandidateId
+        );
+
+    if (!adaptedCandidate) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate ID was not present in the adapted runtime candidate set.",
+      };
+    }
+
+    if (
+      adaptedCandidate.usable ===
+        false ||
+      selectionResult.candidate
+        .usable !== true
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate was not usable.",
+      };
+    }
+
+    const alreadyAttached =
+      adaptedCandidate
+        .alreadyAttached === true;
+
+    if (
+      selectionResult.candidate
+        .alreadyAttached !==
+      alreadyAttached
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "Selected Work Setup candidate attachment state did not match adapted runtime state.",
+      };
+    }
+
+    if (
+      selectionMode ===
+        "REUSE_EXISTING" &&
+      !alreadyAttached
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "REUSE_EXISTING requires an already-attached Work Setup candidate.",
+      };
+    }
+
+    if (
+      selectionMode ===
+        "ATTACH_NEW" &&
+      alreadyAttached
+    ) {
+      return {
+        status: "ERROR",
+        reason:
+          "ATTACH_NEW requires an unattached Work Setup candidate.",
+      };
+    }
+
+    return {
+      status: selectionMode,
+      workSetupId:
+        selectedCandidateId,
+      ...(
+        adaptedCandidate.label
+          ? {
+              workSetupTitle:
+                adaptedCandidate.label,
+            }
+          : {}
+      ),
+      candidateCount:
+        runtimeCandidates
+          .candidates.length,
+      visibleRecordCount:
+        runtimeCandidates
+          .visibleCount,
+      proposal:
+        selectionResult.proposal,
+      evaluation:
+        selectionResult.evaluation,
+    };
+  } catch (error: unknown) {
+    return {
+      status: "ERROR",
+      reason:
+        error instanceof Error
+          ? error.message
+          : String(error),
+    };
+  }
 }
 
 export function selectSafeWorkSetupCandidate(
@@ -538,6 +1086,9 @@ const defaultDependencies:
     getExecutionContext:
       getCachedBrowserExecutionContext,
 
+    selectCandidate:
+      runGenericFixtureCandidateSelection,
+
     getJson:
       apiGet,
 
@@ -668,6 +1219,19 @@ function blockedResult(
     notes: [note],
     deterministicEvidence: [],
     cleanups,
+  };
+}
+
+function errorResult(
+  reasonCategory: string,
+  note: string
+): BrowserFixtureProviderResult {
+  return {
+    status: "ERROR",
+    reasonCategory,
+    notes: [note],
+    deterministicEvidence: [],
+    cleanups: [],
   };
 }
 
@@ -848,50 +1412,6 @@ export function createTalentContractWorkSetupFixtureProvider(
               talentToken
             );
 
-        const visibleBeforeItems =
-          extractItems(
-            visibleBefore
-          );
-
-        if (
-          visibleBeforeItems.length >
-          0
-        ) {
-          await dependencies
-            .refreshSurface(page);
-
-          const populated =
-            await dependencies
-              .verifyPopulatedSurface(
-                page,
-                getWorkSetupTitle(
-                  visibleBeforeItems[0]
-                )
-              );
-
-          if (!populated) {
-            return blockedResult(
-              "FIXTURE_PROVISIONING_FAILED",
-              "Talent API already exposed Work Setup records, but the exact compact Work Setup card did not finish rendering without a visible loading indicator."
-            );
-          }
-
-          const note =
-            `Existing populated Work Setup fixture retained for contractId=${runtimeFixture.contractId}, jobId=${jobId}; no mutation or cleanup was required.`;
-
-          await captureCheckpoint?.({
-            phase: "setup",
-            label:
-              "work-setup-existing",
-            note,
-            fullPage: true,
-          });
-
-          return readyResult(
-            note
-          );
-        }
-
         const companyData =
           await dependencies
             .getJson(
@@ -903,18 +1423,159 @@ export function createTalentContractWorkSetupFixtureProvider(
             );
 
         const selection =
-          selectSafeWorkSetupCandidate(
+          await resolveWorkSetupFixtureCandidateDecision({
+            testCase,
             companyData,
-            visibleBefore
-          );
+            visibleTalentData:
+              visibleBefore,
+            selectCandidate:
+              dependencies
+                .selectCandidate,
+            ...(
+              dependencies
+                .requestCandidateProposal
+                ? {
+                    requestCandidateProposal:
+                      dependencies
+                        .requestCandidateProposal,
+                  }
+                : {}
+            ),
+          });
 
         if (
           selection.status ===
           "BLOCKED"
         ) {
+          const diagnostics:
+            string[] = [];
+
+          if (
+            selection.evaluationStatus
+          ) {
+            diagnostics.push(
+              `evaluationStatus=${selection.evaluationStatus}`
+            );
+          }
+
+          if (
+            typeof selection
+              .candidateCount ===
+              "number"
+          ) {
+            diagnostics.push(
+              `candidateCount=${selection.candidateCount}`
+            );
+          }
+
+          if (
+            typeof selection
+              .companyRecordCount ===
+              "number"
+          ) {
+            diagnostics.push(
+              `companyRecordCount=${selection.companyRecordCount}`
+            );
+          }
+
+          if (
+            typeof selection
+              .visibleRecordCount ===
+              "number"
+          ) {
+            diagnostics.push(
+              `visibleRecordCount=${selection.visibleRecordCount}`
+            );
+          }
+
           return blockedResult(
             "FIXTURE_PRECONDITION_UNSAFE",
-            `${selection.reason} companyCount=${selection.companyCount}, visibleCount=${selection.visibleCount}.`
+            `${selection.reason}${
+              diagnostics.length > 0
+                ? ` ${diagnostics.join(
+                    ", "
+                  )}.`
+                : ""
+            }`
+          );
+        }
+
+        if (
+          selection.status ===
+          "ERROR"
+        ) {
+          return errorResult(
+            "FIXTURE_SELECTION_ERROR",
+            selection.reason
+          );
+        }
+
+        if (!selection.workSetupTitle) {
+          return blockedResult(
+            "FIXTURE_PRECONDITION_UNSAFE",
+            `Selected Work Setup ${selection.workSetupId} did not expose an exact runtime title required for selected-card UI verification.`
+          );
+        }
+
+        if (
+          selection.status ===
+          "REUSE_EXISTING"
+        ) {
+          if (
+            !containsExactWorkSetup(
+              visibleBefore,
+              selection.workSetupId
+            )
+          ) {
+            return blockedResult(
+              "FIXTURE_PRECONDITION_UNSAFE",
+              `Selected reusable Work Setup ${selection.workSetupId} was not present in the exact talent-visible runtime state.`
+            );
+          }
+
+          await dependencies
+            .refreshSurface(page);
+
+          const populated =
+            await dependencies
+              .verifyPopulatedSurface(
+                page,
+                selection
+                  .workSetupTitle
+              );
+
+          if (!populated) {
+            return blockedResult(
+              "FIXTURE_PROVISIONING_FAILED",
+              `Reusable Work Setup ${selection.workSetupId} was present in the talent API, but its exact compact card did not finish rendering without a visible loading indicator.`
+            );
+          }
+
+          const note =
+            `Reused existing Work Setup ${selection.workSetupId} for contractId=${runtimeFixture.contractId}, jobId=${jobId}; exact API/UI state was verified and no cleanup ownership was established.`;
+
+          await captureCheckpoint?.({
+            phase: "setup",
+            label:
+              "work-setup-reused",
+            note,
+            fullPage: true,
+          });
+
+          return readyResult(
+            note
+          );
+        }
+
+        if (
+          containsExactWorkSetup(
+            visibleBefore,
+            selection.workSetupId
+          )
+        ) {
+          return blockedResult(
+            "FIXTURE_PRECONDITION_UNSAFE",
+            `Selected attachable Work Setup ${selection.workSetupId} was already present in the exact talent-visible runtime state.`
           );
         }
 
