@@ -135,3 +135,15 @@ export function setRuntimeTalentContractFixture(
     ),
   };
 }
+
+export function copyRuntimeTalentContractFixture(
+  sourceCase: any,
+  targetCase: any
+): void {
+  setRuntimeTalentContractFixture(
+    targetCase,
+    getRuntimeTalentContractFixture(
+      sourceCase
+    )
+  );
+}

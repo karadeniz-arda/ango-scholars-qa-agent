@@ -23,6 +23,9 @@ import {
 import {
   resolveTalentContractDetailRoute,
 } from "./browser-route-talent-contract.js";
+import {
+  copyRuntimeTalentContractFixture,
+} from "./fixtures/talent-contract-fixture-context.js";
 
 export async function resolveBrowserRoute(
   plan: any,
@@ -425,6 +428,11 @@ export async function resolveBrowserRouteCandidates(
       plan,
       runtimeResolutionCase
     );
+
+  copyRuntimeTalentContractFixture(
+    runtimeResolutionCase,
+    testCase
+  );
 
   const runtimeFixtureResolutionFailure =
     String(
