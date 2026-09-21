@@ -44,4 +44,6 @@ Do not claim universal unattended Jira coverage, universal fixture cleanup, scre
 
 **Why retain Final-13?** It distinguishes compatibility/environment drift from actual agent regressions, but does not define today's PASS floor.
 
+**Why did old Final-13 have 8 PASS but current Final-13 has 0?** The eight historical cases were forensically accounted for: three now lack compatible fixtures, three used legacy evidence semantics that do not meet the current source-authorized deterministic proof standard, and two require benchmark/source-provenance migration even though the underlying AS-1058 literal-proof capability still works. No true agent regression was identified.
+
 **What is next?** Typed fixture authority and isolated cleanup proof first; then only source-backed proof primitives with bounded generic grounding.

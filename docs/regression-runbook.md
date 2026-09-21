@@ -28,7 +28,7 @@ AS-1311 is the key safety example: `GOAL_ALREADY_SATISFIED` did not override a f
 
 Final-13 is not a current PASS floor. Canonical plan hashes were verified for the matched-profile run at `qa-results/runs/final-13-canonical-matched-profile-20260921-154500`.
 
-The run found six API PASS and eight API BLOCKED results; browser results were 25 BLOCKED, with no browser PASS or FAIL. Three historical browser PASS cases were classified `FIXTURE_DRIFT`, five `AMBIGUOUS_INDETERMINATE`, and zero as confirmed agent regressions. Use this corpus for provenance and compatibility analysis, never to override a current fail-closed result.
+The run found six API PASS and eight API BLOCKED results; browser results were 25 BLOCKED, with no browser PASS or FAIL. The subsequent forensic accounting of all eight historical browser PASS cases found 3 `FIXTURE_DRIFT`, 3 `LEGACY_FALSE_OR_WEAK_PASS`, 2 `BENCHMARK_MIGRATION_GAP`, 0 `TRUE_AGENT_REGRESSION`, and 0 `INSUFFICIENT_EVIDENCE`. Use this corpus for provenance and compatibility analysis, never to override a current fail-closed result.
 
 ## Evidence hierarchy and delta classification
 
@@ -36,11 +36,15 @@ Keep these layers separate: source authority; execution contract; runtime person
 
 | Delta | First classification | Next step |
 | --- | --- | --- |
-| Required deterministic check changes under same plan/profile | Possible product or agent regression | Inspect requirement, exact evidence, and audit |
-| Route/persona/entity/fixture changes | Environment/state drift | Preserve first blocker; do not invent a clean state |
-| Model action differs but verdict does not | Operational variance | Retain telemetry only |
-| Review differs but deterministic proof does not | Review variance | Do not replace canonical verdict |
-| Proof absent or ambiguous | Capability incomplete | Keep `BLOCKED`/`MANUAL_REQUIRED` |
+| Same source authority, compatible runtime state, and expected proof path no longer works | `CODE_REGRESSION` / `TRUE_AGENT_REGRESSION` candidate | Require concrete deterministic evidence before assigning blame |
+| Route/persona/entity/fixture changes | `ENVIRONMENTAL_DRIFT` or `FIXTURE_DRIFT` | Preserve first blocker; do not invent a clean state |
+| Legacy plan lacks source obligation/check representation while a current primitive exists | `BENCHMARK_MIGRATION_GAP` | Treat as controlled source/provenance migration, not a runner patch |
+| Historical PASS depended on screenshots, model satisfaction, inferred authority, or compatibility ownership | `LEGACY_FALSE_OR_WEAK_PASS` | Do not restore old PASS behavior |
+| Model action differs but verdict does not | `MODEL_NAVIGATION_DRIFT` / operational variance | Retain telemetry only |
+| Runtime proof path changes with authority intact | `PROOF_PATH_DRIFT` | Compare exact contract, evidence binding, and reconciliation gates |
+| Evidence cannot distinguish categories | `AMBIGUOUS_INDETERMINATE` | Preserve artifacts and defer a production change |
+
+A historical PASS under an older evidence model may be non-comparable to a current source-authorized deterministic proof contract. Never modify production logic merely to recover a historical PASS before this classification is complete.
 
 Debug the earliest authoritative blocker: (1) source/contract, (2) session/route, (3) target/entity, (4) fixture lifecycle, (5) safety audit, (6) deterministic evidence, (7) case verdict versus ticket coverage.
 

@@ -27,9 +27,21 @@ AS-1311 is the practical safety example: a model `GOAL_ALREADY_SATISFIED` assess
 
 31 frozen plans yielded 37 runtime cases. A–B status delta was zero; B–C status and technical deltas were zero; PASS asymmetry was zero. Result: `STABLE_CASE_AND_TECHNICAL`.
 
-## Final-13 compatibility
+## Historical Final-13 accounting
 
-Final-13 is historical compatibility evidence, not the current PASS target. The canonical plans/hashes were verified and a matched-profile run completed with zero confirmed agent regressions. Of old browser PASS results, three are now `FIXTURE_DRIFT` and five are `AMBIGUOUS_INDETERMINATE`. Historical/screenshot evidence does not supersede current source-bound deterministic proof.
+Final-13 is retained as historical canonical compatibility evidence, not the current strict PASS floor. The canonical plans/hashes were verified and the matched-profile forensic found no true agent regressions among the eight historical browser PASS cases.
+
+| Historical PASS accounting | Count | Interpretation |
+| --- | ---: | --- |
+| `FIXTURE_DRIFT` | 3 | AS-1014 web-1/web-2 and AS-1190 web-2 no longer had compatible runtime fixture state. |
+| `LEGACY_FALSE_OR_WEAK_PASS` | 3 | AS-1139 web-1/web-2 and AS-1165 web-1 used legacy compatibility or handoff ownership that lacked current source-authorized proof authority. |
+| `BENCHMARK_MIGRATION_GAP` | 2 | AS-1058 web-1/web-2 have byte-identical legacy plans that lack the modern source-obligation and execution-contract representation. |
+| `TRUE_AGENT_REGRESSION` | 0 | None established. |
+| `INSUFFICIENT_EVIDENCE` | 0 | None remained after the saved-plan/runtime comparison. |
+
+The current source-bound literal proof capability still works for AS-1058 in Fresh31. Its Final-13 gap is therefore a controlled benchmark/source-provenance migration question, not runner regression. Historical screenshot, model, or compatibility-flow evidence does not supersede current source-authorized deterministic proof.
+
+No production patch was justified by this forensic audit. `ACCEPT_FINAL13_AS_HISTORICAL_NOT_COMPARABLE` is the final compatibility decision.
 
 ## Capability inventory
 
@@ -55,7 +67,15 @@ Final-13 is historical compatibility evidence, not the current PASS target. The 
 - Current unattended AS-1402 execution.
 - Local forensic or unwired prototype files.
 
-The fixture-cleanup setting is a policy signal, not universal proof of safe lifecycle cleanup. `BLOCKED` and `MANUAL_REQUIRED` are valid outcomes. Environment, fixture, permissions, product, and model behavior can drift; this cohort is not a general ML benchmark.
+The fixture-cleanup setting is a policy signal, not universal proof of safe lifecycle cleanup. Safe fixture consumption and exact entity binding are implemented in meaningful paths; generic unattended fixture construction is not production-ready. Permission to create test data is not authority to decide which data validly satisfies a source requirement. Typed construction authority, isolated ownership, lifecycle control, and cleanup proof remain future work.
+
+`BLOCKED` and `MANUAL_REQUIRED` are valid outcomes. Environment, fixture, permissions, product, and model behavior can drift; this cohort is not a general ML benchmark.
+
+## Fresh31 usefulness decision
+
+A 37-case first-blocker census was completed before stopping development. The dominant blockers were source-authority availability (12 cases), fixture/entity availability (11), genuinely manual visual verification (5), and smaller heterogeneous route/proof gaps. The runtime funnel was 37 cases → 18 accepted routes → 18 generic proposals → 13 safe executions → 12 verified state changes → 1 autonomous handoff → 2 deterministic PASS cases.
+
+The census found no small, generic, safe, high-leverage patch that could unlock multiple current fixture-ready cases without weakening source authority, fixture identity, mutation policy, or deterministic proof gates. The final engineering decision is `STOP_DEVELOPMENT_AND_HANDOFF`: evidence-based, not merely time-based. Future improvements remain possible, especially typed fixture authority, source-to-proof contracts, and route diagnostics.
 
 ## Prioritized next work
 
