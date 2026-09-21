@@ -1,19 +1,23 @@
 import fs from "node:fs";
 import yaml from "yaml";
-import { Stagehand } from "@browserbasehq/stagehand";
-import { chromium } from "playwright";
-import type { TestPlan } from "../../planner/types.js";
+import type {
+  BrowserStep,
+  TestPlan,
+} from "../../planner/types.js";
+import { readExecutionTestPlan } from "../../planner/compiled-test-plan.js";
 import type {
   RuntimeContextsByPersona,
 } from "../../runtime/runtime-context.js";
-import { createCustomToken } from "../../auth/firebase.js";
-import type { Page, Locator } from "playwright";
+import type { Page } from "playwright";
 import {
   resolveBrowserRouteCandidates,
 } from "./browser-route-resolver.js";
 import {
   probeBrowserRouteCandidates,
 } from "./browser-route-probe.js";
+import {
+  buildGenericBrowserAssertionHandoffCase,
+} from "./browser-agent-assertion-handoff.js";
 import {
   reviewBrowserEvidence,
   type BrowserEvidenceCheckpoint,
@@ -24,1500 +28,172 @@ import {
   reviewBrowserVideoEvidence,
   shouldRunVideoEvidenceReview,
 } from "./video-evidence-review.js";
+import type {
+  BrowserEvidenceSummary,
+  BrowserStepResult,
+} from "./browser-execution-types.js";
 import {
-  clickSmartButton,
-  clickSmartText,
-  openLikelyPanelOrItem,
-  openMatchingTableRowDetail,
-  findTextInOpenDetailSurface,
-} from "./generic-browser-actions.js";
+  buildEvidenceReviewCase,
+  getBrowserManualAcceptanceCoverageGapReason,
+  getBrowserPassSemanticGuardReason,
+  reconcileBrowserResultFromEvidence,
+} from "./browser-result-reconciliation.js";
 import {
-  openSmartMenu,
-  selectRuntimeTopTab,
-  selectSmartOption,
-} from "./browser-control-interaction.js";
+  buildSuccessSignal,
+  buildTraceFromBrowserRun,
+  formatTrace,
+} from "./browser-trace.js";
 import {
-  openRuntimeControl,
-  selectRuntimeFilterOption,
-} from "./runtime-filter-interaction.js";
+  getBrowserCaseText,
+  inferBrowserCaseArea,
+} from "./browser-case-relevance.js";
 import {
-  isInvoiceRowClickRequest,
-  resolveAndOpenInvoiceRow,
-} from "./browser-entity-interaction.js";
-
-
-
-
-type BrowserPersona = "company_admin" | "talent";
-
-export type BrowserRunOptions = {
-  runtimeContexts?:
-    RuntimeContextsByPersona;
-};
-
-type BrowserArea =
-  | "assessments"
-  | "languages"
-  | "skills"
-  | "jobs"
-  | "work-setups"
-  | "payments"
-  | "contracts"
-  | "offers"
-  | "talent-pool"
-  | "onboarding"
-  | "talent-profile";
-
+  formatBrowserHumanReadableQaResult,
+  presentBrowserHumanReadableQaResult,
+} from "./browser-human-readable-result.js";
 import {
-  createDraftJobAndVerifyRedirect,
-} from "./browser-job-creation-redirect.js";
-
+  getRuntimeDeepRouteBinding,
+} from "./browser-deep-route-binding-context.js";
+import {
+  cancelAssessmentEditIfOpen,
+  ensureAssessmentLanguageEditorNavigationStep,
+  ensureAssessmentLanguageReadOnlyNavigationStep,
+  isAssessmentLanguageCase,
+  logVisibleAssessmentControls,
+  prepareAssessmentLanguageModal,
+} from "./browser-assessment-language-flow.js";
+import {
+  createBrowserRuntimeSession,
+  detectAuthWall,
+  signInAsPersona,
+  type BrowserPersona,
+} from "./browser-session-manager.js";
+import {
+  prepareComposedRuntimeCase, composedPreparationAllowsInteraction,
+  blockedComposedPreparation, type BrowserComposedRuntimePreparation,
+} from "./browser-composed-runtime-preparation.js";
+import {
+  runGenericBrowserSteps,
+} from "./browser-step-executor.js";
+import {
+  beginBrowserCaseRuntimeAudit,
+} from "./browser-case-runtime-audit.js";
+import {
+  deriveBrowserCaseRuntimeSafetySignals,
+  deriveBrowserDeterministicProofRuntimeSignals,
+  buildBrowserDeterministicPassRuntimeContext,
+} from "./browser-deterministic-pass-runtime-context.js";
+import { normalizeBrowserDeterministicPassFixtureStatus } from "./browser-deterministic-pass-fixture-status.js";
+import { attemptDeterministicBrowserPass } from "./browser-deterministic-pass-attempt.js";
+import {
+  applyBrowserCaseVerdict,
+  deriveBrowserCaseVerdict,
+  isOperationalDiscoverySupportUnit,
+  materializeBrowserRuntimeExecutionContract,
+} from "./browser-case-verdict.js";
+import { createValidatedBrowserRuntimeExecutionBinding } from "./browser-runtime-execution-binding.js";
+import {
+  getBrowserBlockReason,
+  getBrowserBlockReasonCategory,
+} from "./browser-case-blocking-policy.js";
 import {
   executeDeferredCleanups,
   type DeferredCleanup,
 } from "./browser-deferred-cleanup.js";
-
-async function visualAction(page: Page, locator: Locator, action: "click") {
-  const isVisible = await locator.first().isVisible({ timeout: 2000 }).catch(() => false);
-  if (!isVisible) {
-    console.log(" Visual action skipped: target element is not visible.");
-    return;
-  }
-  const box = await locator.first().boundingBox();
-  if (box) {
-    const targetX = box.x + box.width / 2;
-    const targetY = box.y + box.height / 2;
-    await page.mouse.move(targetX, targetY, { steps: 35 });
-    await page.waitForTimeout(250);
-  }
-  if (action === "click") {
-    await locator.click();
-  }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hasRuntimeInvoiceFixtureResolver(
-  testCase: any
-): boolean {
-  const steps = Array.isArray(
-    testCase?.steps
-  )
-    ? testCase.steps
-    : [];
-
-  return steps.some(
-    (step: any) =>
-      step?.action === "clickText" &&
-      isInvoiceRowClickRequest(
-        testCase,
-        String(step?.text || "")
-      )
-  );
-}
-
-/**
- * Prevent record-specific assertions from producing a
- * false product FAIL when the planner explicitly states
- * that the required staging fixture is unavailable.
- *
- * Invoice cases are exempt because their specialized
- * interaction can discover and verify a safe runtime row.
- */
-function isChangeRequestRowDetailClickRequest(
-  testCase: any,
-  requestedText: string
-): boolean {
-  const caseText =
-    getBrowserCaseText(testCase)
-      .replace(/[-_]+/g, " ");
-
-  const requested = String(
-    requestedText || ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
-  if (
-    !requested ||
-    /^change requests?$/.test(
-      requested
-    )
-  ) {
-    return false;
-  }
-
-  const changeRequestContext =
-    caseText.includes(
-      "change request"
-    ) ||
-    caseText.includes(
-      "publish request"
-    ) ||
-    caseText.includes(
-      "field update request"
-    );
-
-  const detailContext =
-    caseText.includes("comparison") ||
-    caseText.includes("review") ||
-    caseText.includes("details") ||
-    caseText.includes("detail");
-
-  const requestedRecordState =
-    requested.includes("request") ||
-    requested.includes("publish") ||
-    requested.includes(
-      "field update"
-    );
-
-  return (
-    changeRequestContext &&
-    detailContext &&
-    requestedRecordState
-  );
-}
-
-function getExplicitMissingBrowserFixtureReason(
-  testCase: any
-): string | null {
-  const runtimeFixturePolicy =
-    String(
-      testCase?.runtimeFixturePolicy || ""
-    )
-      .trim()
-      .toLowerCase();
-
-  /*
-   * RECORDLESS_CREATE_ROUTE_FIXTURE_GATE_V1
-   *
-   * A concrete create/new route can be inspected
-   * without an existing record fixture when every
-   * planned action is observational and read-only.
-   */
-  const startRoute =
-    String(testCase?.startRoute || "")
-      .trim();
-
-  const steps =
-    Array.isArray(testCase?.steps)
-      ? testCase.steps
-      : [];
-
-  const safeObservationActions =
-    new Set([
-      "clickText",
-      "openRuntimeControl",
-      "assertTextVisible",
-      "assertTextNotVisible",
-      "assertUrlContains",
-      "assertUrlNotContains",
-    ]);
-
-  const isRecordlessCreateRoute =
-    /(?:^|\/)(?:create|new)(?:\/|$)/i.test(
-      startRoute
-    );
-
-  const hasOnlySafeObservationSteps =
-    steps.length > 0 &&
-    steps.every(
-      (step: any) =>
-        safeObservationActions.has(
-          String(step?.action || "")
-        )
-    );
-
-  if (
-    isRecordlessCreateRoute &&
-    hasOnlySafeObservationSteps
-  ) {
-    return null;
-  }
-
-  /*
-   * COMPATIBLE_STATE_FIXTURE_GATE_V1
-   *
-   * A compatible-state case may safely inspect the
-   * concrete runtime route without requiring one exact
-   * record fixture. Real resolver failures are handled
-   * separately by runtimeFixtureResolutionFailure.
-   */
-  if (
-    runtimeFixturePolicy ===
-      "compatible-state"
-  ) {
-    return null;
-  }
-
-  if (
-    hasRuntimeInvoiceFixtureResolver(
-      testCase
-    )
-  ) {
-    return null;
-  }
-
-  const caseText =
-    getBrowserCaseText(testCase)
-      .replace(/\s+/g, " ");
-
-  const explicitMissingFixtureSignals = [
-    /blocked(?: for automated execution)? until[^.]{0,240}\bfixture\b/,
-    /execution requires[^.]{0,240}\bfixture\b/,
-    /\bfixture\b[^.]{0,180}\b(?:not supplied|unavailable|missing)\b/,
-    /\b(?:not supplied|unavailable|missing)\b[^.]{0,200}\bfixture\b/,
-    /\brequires?\b[^.]{0,180}\bmanual_required fixture setup\b/,
-  ];
-
-  if (
-    !explicitMissingFixtureSignals.some(
-      (pattern) =>
-        pattern.test(caseText)
-    )
-  ) {
-    return null;
-  }
-
-  return (
-    `Browser fixture gate blocked ` +
-    `${testCase?.id || "case"}: ` +
-    `required fixture data is explicitly unavailable ` +
-    `or not supplied, and no supported runtime fixture ` +
-    `resolver applies.`
-  );
-}
-
-function getBrowserBlockReason(testCase: any): string | null {
-  const persona = String(testCase.persona || "").trim();
-  const startRoute = String(testCase.startRoute || "").trim();
-
-  if (!["company_admin", "talent"].includes(persona)) {
-    return `Unsupported browser persona "${persona}". Supported browser personas: company_admin, talent.`;
-  }
-  if (!startRoute || startRoute.toUpperCase() === "UNKNOWN") {
-    const runtimeFailure = String(
-      testCase.runtimeRouteDiscoveryFailure || ""
-    ).trim();
-
-    if (runtimeFailure) {
-      return runtimeFailure;
-    }
-
-    return "Browser startRoute is UNKNOWN. GitHub diff/UI route context is needed before this case can be executed.";
-  }
-  if (/{[^}]+}/.test(startRoute)) {
-  return `Browser startRoute contains unresolved placeholder: ${startRoute}`;
-}
-
-const runtimeFixtureResolutionFailure =
-  String(
-    testCase
-      ?.runtimeFixtureResolutionFailure ||
-      ""
-  ).trim();
-
-if (runtimeFixtureResolutionFailure) {
-  return runtimeFixtureResolutionFailure;
-}
-
-const urlAssertionPrerequisiteFailure =
-  String(
-    testCase
-      ?.runtimeUrlAssertionPrerequisiteFailure ||
-      ""
-  ).trim();
-
-if (urlAssertionPrerequisiteFailure) {
-  return urlAssertionPrerequisiteFailure;
-}
-
-const textAssertionProvenanceFailure =
-  String(
-    testCase
-      ?.runtimeTextAssertionProvenanceFailure ||
-      ""
-  ).trim();
-
-if (textAssertionProvenanceFailure) {
-  return textAssertionProvenanceFailure;
-}
-
-const fixtureBlockReason =
-  getExplicitMissingBrowserFixtureReason(
-    testCase
-  );
-
-if (fixtureBlockReason) {
-  return fixtureBlockReason;
-}
-
-const relevanceBlockReason =
-  getBrowserRelevanceBlockReason(testCase);
-
-if (relevanceBlockReason) {
-  return relevanceBlockReason;
-}
-
-if (
-  isAssessmentLanguageModalCase(testCase) &&
-  hasAssessmentLanguagePersistMutationStep(
-    testCase
-  ) &&
-  !browserEditFlowsAllowed()
-) {
-  return (
-    "Assessment language case includes an action " +
-    "that may persist changes. Browser edit-flow " +
-    "mutations are disabled by default to protect " +
-    "staging data. Set " +
-    "QA_ALLOW_BROWSER_EDIT_FLOWS=true only for " +
-    "isolated test data."
-  );
-}
-
-return null;
-}
-
-async function cancelAssessmentEditIfOpen(
-  page: Page,
-  testCase: any
-): Promise<void> {
-  if (
-    !isAssessmentLanguageModalCase(
-      testCase
-    )
-  ) {
-    return;
-  }
-
-  const openDialog = page
-    .locator(
-      '[role="dialog"]:visible, .ant-modal-wrap:visible'
-    )
-    .last();
-
-  const dialogVisible = await openDialog
-    .isVisible({
-      timeout: 1000,
-    })
-    .catch(() => false);
-
-if (dialogVisible) {
-  const levelAdjustmentPanelOpen =
-    await page
-      .getByText(
-        /^Listening\*?$/i
-      )
-      .first()
-      .isVisible({
-        timeout: 500,
-      })
-      .catch(() => false);
-
-  if (levelAdjustmentPanelOpen) {
-    const levelAdjustmentButton =
-      page
-        .getByRole("button", {
-          name: /level adjustment/i,
-        })
-        .first();
-
-    const adjustmentButtonVisible =
-      await levelAdjustmentButton
-        .isVisible({
-          timeout: 500,
-        })
-        .catch(() => false);
-
-    if (adjustmentButtonVisible) {
-      await levelAdjustmentButton.click();
-      await page.waitForTimeout(250);
-
-      console.log(
-        ` Assessment level adjustment panel ` +
-          `closed for ${testCase.id}`
-      );
-    }
-  }
-
-  const modalCancel = openDialog
-      .getByRole("button", {
-        name: /^cancel$/i,
-      })
-      .first();
-
-    const modalCancelVisible =
-      await modalCancel
-        .isVisible({
-          timeout: 1000,
-        })
-        .catch(() => false);
-
-    if (modalCancelVisible) {
-      await modalCancel.click();
-
-      console.log(
-        ` Assessment language dialog cancelled ` +
-          `for ${testCase.id}`
-      );
-    } else {
-      const modalClose = openDialog
-        .locator(
-          ".ant-modal-close"
-        )
-        .first();
-
-      const modalCloseVisible =
-        await modalClose
-          .isVisible({
-            timeout: 1000,
-          })
-          .catch(() => false);
-
-      if (modalCloseVisible) {
-        await modalClose.click();
-
-        console.log(
-          ` Assessment language dialog closed ` +
-            `for ${testCase.id}`
-        );
-      }
-    }
-
-    await page.waitForTimeout(500);
-  }
-
-  const cancelEditButton = page
-    .getByRole("button", {
-      name: /^cancel edit$/i,
-    })
-    .first();
-
-  const cancelEditVisible =
-    await cancelEditButton
-      .isVisible({
-        timeout: 1000,
-      })
-      .catch(() => false);
-
-  if (!cancelEditVisible) {
-    return;
-  }
-
-  await cancelEditButton.click();
-  await page.waitForTimeout(500);
-
-  console.log(
-    ` Assessment edit flow cancelled for ` +
-      `${testCase.id}`
-  );
-}
-
-function getBrowserBlockReasonCategory(
-  reason: string
-): string {
-  if (
-    reason.includes(
-      "Browser URL assertion gate blocked"
-    )
-  ) {
-    return (
-      "URL_ASSERTION_PREREQUISITE_MISSING"
-    );
-  }
-
-  if (
-    reason.includes(
-      "Browser text assertion provenance gate blocked"
-    )
-  ) {
-    return (
-      "TEXT_ASSERTION_PROVENANCE_MISSING"
-    );
-  }
-
-  if (
-    reason.includes(
-      "Browser fixture gate blocked"
-    )
-  ) {
-    return "TEST_DATA_ISSUE";
-  }
-
-  if (
-    reason.includes(
-      "Browser relevance gate rejected"
-    )
-  ) {
-    return "IRRELEVANT_BROWSER_ROUTE";
-  }
-
-  if (
-    reason.includes(
-      "Unsupported browser persona"
-    )
-  ) {
-    return "UNSUPPORTED_BROWSER_PERSONA";
-  }
-
-  if (
-    reason.includes(
-      "Runtime browser route discovery exhausted"
-    )
-  ) {
-    return "ROUTE_DISCOVERY_EXHAUSTED";
-  }
-
-  return "MISSING_BROWSER_ROUTE";
-}
-
-type BrowserStep =
-  | { action: "wait"; ms: number }
-  | { action: "reload" }
-  | { action: "clickTopTab"; text: string }
-  | { action: "selectRuntimeTopTab" }
-  | {
-      action: "openRuntimeControl";
-      target: string;
-    }
-  | {
-      action: "selectRuntimeFilterOption";
-      queryKey: string;
-      hint?: string;
-    }
-  | {
-      action: "createDraftJobAndVerifyRedirect";
-      origin: "jobs" | "all-jobs";
-    }
-  | { action: "clickButton"; text: string }
-  | { action: "clickText"; text: string }
-  | { action: "openMenu"; text: string }
-  | { action: "selectOption"; text: string }
-  | { action: "clickProjectDropdown" }
-  | { action: "selectLastDropdownOption" }
-  | { action: "assertUrlContains"; text: string }
-  | { action: "assertUrlNotContains"; text: string }
-  | { action: "assertTextVisible"; text: string }
-  | { action: "assertTextNotVisible"; text: string }
-  | { action: "setViewport"; width: number; height: number };
-
-type BrowserStepResult = {
-  status:
-    | "PASS"
-    | "FAIL"
-    | "BLOCKED"
-    | "MANUAL_REQUIRED"
-    | "ERROR";
-  reasonCategory: string;
-  notes: string[];
-  deterministicEvidence?:
-    BrowserDeterministicEvidence[];
+import {
+  prepareBrowserFixture,
+  shouldPrepareBrowserFixture,
+  resolveBrowserFixtureEntryRoute,
+} from "./fixtures/browser-fixture-lifecycle.js";
+import type { BrowserFixturePreparationResult } from "./fixtures/browser-fixture-types.js";
+import {
+  runGenericBrowserShadow,
+  type BrowserShadowAction,
+} from "./browser-agent-shadow.js";
+import type {
+  BrowserObservation,
+} from "./browser-observation.js";
+import {
+  observeBrowserPage,
+} from "./browser-observation.js";
+import {
+  resolveBrowserExecutionSurfacePrerequisite,
+} from "./browser-execution-surface-prerequisite.js";
+
+import {
+  aggregateGenericBrowserUsefulness,
+  summarizeGenericBrowserUsefulness,
+  type GenericBrowserUsefulnessEvent,
+} from "./generic-browser-usefulness-telemetry.js";
+import {
+  buildGenericBrowserUsefulnessExecutionProfile,
+} from "./generic-browser-usefulness-execution-profile.js";
+import {
+  summarizeBrowserOperationalCapabilities,
+} from "./browser-capability-evaluation.js";
+import type {
+  BrowserStandardRunCapabilityRecognition,
+} from "./browser-standard-run-capability-recognition.js";
+import {
+  discoverFrontendVisibleFieldProvenance,
+} from "../../discovery/frontend-visible-field-provenance.js";
+import {
+  buildCollectionFilterRequirements,
+} from "./browser-grounded-search-proof.js";
+import {
+  executeBrowserEvidenceContractProofs,
+  summarizeBrowserEvidenceContractProofCoverage,
+  type BrowserEvidenceContractProofResult,
+} from "./browser-evidence-contract-proof.js";
+import {
+  allocateBrowserRuntimeSourceAssertions,
+  browserSourceBoundAssertionPathOf,
+  buildBrowserSourceBoundAssertionSetRequirements,
+  collectBrowserSourceBoundAssertionSetTelemetry,
+  evaluateBrowserSourceBoundAssertionSet,
+  evaluateBrowserSourceBoundAssertionSetDischarge,
+  observeBrowserSourceDerivedButtonCarriers,
+  SOURCE_BOUND_ASSERTION_SET_DISCOVERY_TELEMETRY_MARKER,
+  summarizeBrowserSourceBoundAssertionSetDiscoveryTelemetry,
+} from "./browser-source-bound-assertion-set-proof.js";
+import {
+  auditBrowserCaseProofReadiness,
+} from "./browser-local-state-obligation-discharge.js";
+import {
+  buildBrowserSourceBoundStructuralControlPresenceRequirements,
+  evaluateBrowserSourceBoundStructuralControlPresence,
+} from "./browser-source-bound-structural-control-presence-proof.js";
+import {
+  selectMaterializedBrowserRuntimeCases,
+} from "./browser-execution-case-selection.js";
+
+import {
+  applyBrowserSkillsRuntime,
+} from "./browser-skills-runtime.js";
+import {
+  prepareTimesheetContractConfigFixture,
+} from "./fixtures/timesheet-contract-config-fixture-runtime.js";
+import {
+  runGenericBrowserRuntimeAttempt,
+} from "./generic-browser-runtime-attempt.js";
+import {
+  dispatchBrowserRuntimeFixtureResolution,
+  mergeRuntimeFixturePreparations,
+} from "./browser-runtime-fixture-resolution-dispatch.js";
+
+
+
+
+
+export type BrowserRunOptions = {
+  runtimeContexts?:
+    RuntimeContextsByPersona;
+  /** Read-only execution input for an archived compiled plan; never writes it. */
+  planPath?: string;
 };
 
 
 
-type BrowserCheckpointCaptureArgs = {
-  stepIndex: number;
-  step: BrowserStep;
-  note: string;
-};
-
-type BrowserCheckpointCapture = (
-  args: BrowserCheckpointCaptureArgs
-) => Promise<void>;
-
-type BrowserTraceStatus =
-  | "PASS"
-  | "FAIL"
-  | "BLOCKED"
-  | "MANUAL_REQUIRED"
-  | "ERROR";
-
-type BrowserTraceStep = {
-  index: number;
-  action: string;
-  status: BrowserTraceStatus;
-  note: string;
-  url?: string;
-};
-
-type BrowserEvidenceSummary = {
-  successSignal: string;
-  successSignalReached: boolean;
-  authWallDetected: boolean;
-  pagesVisited: string[];
-  keyVisibleTexts: string[];
-};
-
-function reconcileBrowserResultFromEvidence(args: {
-  currentResult: any;
-  testCase: any;
-  review: any;
-  source: "screenshot" | "video";
-}): void {
-  const {
-    currentResult,
-    testCase,
-    review,
-    source,
-  } = args;
-
-  const previousStatus =
-    String(
-      currentResult?.status || ""
-    ) as BrowserTraceStatus;
-
-  const verdict = String(
-    review?.verdict || ""
-  );
-
-  const deterministicEvidence =
-    Array.isArray(
-      currentResult?.deterministicEvidence
-    )
-      ? currentResult.deterministicEvidence
-      : [];
-
-  const failedDeterministicAssertions =
-    deterministicEvidence.filter(
-      (evidence: any) =>
-        evidence?.passed === false &&
-        /^assert/.test(
-          String(
-            evidence?.action || ""
-          )
-        )
-    );
-
-  const failedDeterministicActions =
-    failedDeterministicAssertions.map(
-      (evidence: any) =>
-        String(
-          evidence?.action || "unknown"
-        )
-    );
-
-  const hasFailedDeterministicUrlAssertion =
-    failedDeterministicAssertions.some(
-      (evidence: any) =>
-        evidence?.action ===
-          "assertUrlContains" ||
-        evidence?.action ===
-          "assertUrlNotContains"
-    );
-
-  const hasFailedDeterministicUiAssertion =
-    failedDeterministicAssertions.some(
-      (evidence: any) =>
-        evidence?.action ===
-          "assertTextVisible" ||
-        evidence?.action ===
-          "assertTextNotVisible"
-    );
-
-
-  const confidence = String(
-    review?.confidence || ""
-  )
-    .trim()
-    .toLowerCase();
-
-  const testCaseText = [
-    String(testCase?.goal || ""),
-    String(
-      testCase?.successCriteria || ""
-    ),
-    JSON.stringify(
-      testCase?.steps || []
-    ),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  /*
-   * These cases depend on a runtime state that the
-   * screenshot itself cannot prove was provisioned.
-   *
-   * A visually clear mismatch is not enough to call
-   * PRODUCT_BUG when the expected fixture/oracle was
-   * never verified.
-   */
-  const hasUnverifiedOracleDependency = [
-    "seeded",
-    "pre-seeded",
-    "preseeded",
-    "fixture",
-    "specific permission",
-    "permission fixture",
-    "pending publish request",
-    "existing publish request",
-    "canpublishjob",
-    "canrequestjobchange",
-  ].some(
-    (phrase) =>
-      testCaseText.includes(phrase)
-  );
-
-  const hasSuccessfulInteractionCheckpoint =
-    Array.isArray(
-      currentResult?.trace
-    ) &&
-    currentResult.trace.some(
-      (step: any) =>
-        step?.action ===
-          "evidence-checkpoint" &&
-        step?.status === "PASS"
-    );
-
-  const hasUnresolvedExecutionStep =
-    Array.isArray(
-      currentResult?.trace
-    ) &&
-    currentResult.trace.some(
-      (step: any) =>
-        step?.action ===
-          "browser-step" &&
-        [
-          "BLOCKED",
-          "MANUAL_REQUIRED",
-          "ERROR",
-        ].includes(
-          String(step?.status || "")
-        )
-    );
-
-  /*
-   * URL assertions are independently observable.
-   *
-   * UI visibility assertions additionally require a
-   * successful interaction checkpoint proving that a
-   * concrete nested UI state was reached.
-   */
-  const hasRetainableDeterministicFailure =
-    previousStatus === "FAIL" &&
-    !hasUnresolvedExecutionStep &&
-    (
-      hasFailedDeterministicUrlAssertion ||
-      (
-        hasFailedDeterministicUiAssertion &&
-        hasSuccessfulInteractionCheckpoint
-      )
-    );
-
-  const recordReconciliationAudit = (
-    decision:
-      | "RETAIN_DETERMINISTIC_FAIL"
-      | "RETAIN_DETERMINISTIC_PASS"
-      | "STATUS_CHANGED",
-    finalStatus: BrowserTraceStatus,
-    reasonCategory?: string
-  ): void => {
-    const previousAudit =
-      Array.isArray(
-        currentResult?.reconciliationAudit
-      )
-        ? currentResult.reconciliationAudit
-        : [];
-
-    currentResult.reconciliationAudit = [
-      ...previousAudit,
-      {
-        source,
-        verdict,
-        confidence,
-        rawStatus: previousStatus,
-        finalStatus,
-        decision,
-        reasonCategory:
-          reasonCategory || null,
-        failedDeterministicActions,
-        interactionCheckpointReached:
-          hasSuccessfulInteractionCheckpoint,
-        unresolvedExecutionStep:
-          hasUnresolvedExecutionStep,
-      },
-    ];
-
-    console.log(
-      ` Evidence reconciliation audit: ` +
-        `raw=${previousStatus}, ` +
-        `final=${finalStatus}, ` +
-        `decision=${decision}, ` +
-        `source=${source}, ` +
-        `verdict=${verdict}, ` +
-        `failedActions=${
-          failedDeterministicActions.length > 0
-            ? failedDeterministicActions.join(",")
-            : "none"
-        }`
-    );
-  };
-
-  let nextStatus:
-    | BrowserTraceStatus
-    | undefined;
-
-  let nextReasonCategory:
-    | string
-    | undefined;
-
-  /*
-   * Evidence may safely downgrade an unproven FAIL.
-   * It must never create a PASS by itself.
-   *
-   * PRODUCT_BUG also does not upgrade
-   * MANUAL_REQUIRED to FAIL. A product failure is
-   * retained only when the runner had already
-   * produced FAIL from executed assertions.
-   */
-  if (
-    verdict === "PASS_CONFIRMED" &&
-    previousStatus === "PASS"
-  ) {
-    if (confidence === "high") {
-      currentResult.reasonCategory =
-        "PASS_EVIDENCE_CONFIRMED";
-
-      console.log(
-        " Evidence confirmation: PASS retained " +
-          "(PASS_CONFIRMED, high)"
-      );
-
-      return;
-    }
-
-    nextStatus =
-      "MANUAL_REQUIRED";
-    nextReasonCategory =
-      "PASS_EVIDENCE_NOT_CONCLUSIVE";
-  } else if (
-    verdict === "WRONG_ROUTE"
-  ) {
-    nextStatus = "BLOCKED";
-    nextReasonCategory =
-      "WRONG_ROUTE";
-  } else if (
-    verdict === "TEST_DATA_ISSUE"
-  ) {
-    nextStatus = "BLOCKED";
-    nextReasonCategory =
-      "TEST_DATA_ISSUE";
-  } else if (
-    verdict ===
-      "AUTOMATION_LIMITATION"
-  ) {
-
-    if (
-      hasRetainableDeterministicFailure
-    ) {
-      recordReconciliationAudit(
-        "RETAIN_DETERMINISTIC_FAIL",
-        previousStatus,
-        String(
-          currentResult?.reasonCategory ||
-            "DETERMINISTIC_ASSERTION_FAILED"
-        )
-      );
-
-      console.log(
-        " Deterministic failure retained; " +
-          `${source} automation limitation ` +
-          "cannot override completed machine assertions."
-      );
-
-      return;
-    }
-
-    nextStatus =
-      "MANUAL_REQUIRED";
-    nextReasonCategory =
-      "AUTOMATION_LIMITATION";
-  } else if (
-    verdict === "INCONCLUSIVE"
-  ) {
-
-    if (
-      hasRetainableDeterministicFailure
-    ) {
-      recordReconciliationAudit(
-        "RETAIN_DETERMINISTIC_FAIL",
-        previousStatus,
-        String(
-          currentResult?.reasonCategory ||
-            "DETERMINISTIC_ASSERTION_FAILED"
-        )
-      );
-
-      console.log(
-        " Deterministic failure retained; " +
-          `${source} inconclusive evidence ` +
-          "cannot override completed machine assertions."
-      );
-
-      return;
-    }
-
-    nextStatus =
-      "MANUAL_REQUIRED";
-    nextReasonCategory =
-      "EVIDENCE_INCONCLUSIVE";
-  } else if (
-    verdict === "PRODUCT_BUG" &&
-    previousStatus === "FAIL"
-  ) {
-    /*
-     * INDEPENDENT_URL_PRODUCT_FINDING_V1
-     *
-     * A completed source-grounded URL assertion is an
-     * independent oracle. Unrelated fixture wording in the
-     * case must not downgrade that deterministic mismatch.
-     */
-    const hasIndependentUrlContractFailure =
-      hasRetainableDeterministicFailure &&
-      hasFailedDeterministicUrlAssertion;
-
-    if (
-      confidence === "high" &&
-      (
-        !hasUnverifiedOracleDependency ||
-        hasIndependentUrlContractFailure
-      )
-    ) {
-      nextStatus = "FAIL";
-      nextReasonCategory =
-        "PRODUCT_ASSERTION_FAILED";
-    } else {
-      nextStatus =
-        "MANUAL_REQUIRED";
-
-      nextReasonCategory =
-        hasUnverifiedOracleDependency
-          ? "UNVERIFIED_TEST_ORACLE"
-          : "UNCONFIRMED_PRODUCT_BUG";
-    }
-  }
-
-  if (
-    !nextStatus ||
-    nextStatus === previousStatus
-  ) {
-    return;
-  }
-
-  currentResult.status =
-    nextStatus;
-
-  currentResult.reasonCategory =
-    nextReasonCategory;
-
-  recordReconciliationAudit(
-    "STATUS_CHANGED",
-    nextStatus,
-    nextReasonCategory
-  );
-
-  currentResult.successSignalReached =
-    nextStatus === "PASS";
-
-  if (
-    currentResult.evidenceSummary
-  ) {
-    currentResult
-      .evidenceSummary
-      .successSignalReached =
-        nextStatus === "PASS";
-  }
-
-  if (
-    Array.isArray(
-      currentResult.trace
-    )
-  ) {
-    const finalStatusStep = [
-      ...currentResult.trace,
-    ]
-      .reverse()
-      .find(
-        (step: any) =>
-          step?.action ===
-          "final-status"
-      );
-
-    if (finalStatusStep) {
-      finalStatusStep.status =
-        nextStatus;
-
-      finalStatusStep.note =
-        `Final browser case status: ` +
-        `${nextStatus} ` +
-        `(reconciled from ` +
-        `${previousStatus} by ` +
-        `${source} evidence: ` +
-        `${verdict})`;
-    }
-  }
-
-  const reconciliationNote =
-    `Evidence reconciliation: ` +
-    `${previousStatus} -> ` +
-    `${nextStatus} ` +
-    `(${source}: ${verdict})`;
-
-  currentResult.evidence = [
-    currentResult.evidence,
-    reconciliationNote,
-  ]
-    .filter(Boolean)
-    .join(" | ");
-
-  console.log(
-    ` ${reconciliationNote}`
-  );
-}
-
-/**
- * Prevent generic text assertions from producing PASS
- * when the case requires a concrete navigation result.
- *
- * Example:
- * Clicking Next and seeing "Jobs" does not prove that
- * job creation completed or redirected to job details.
- */
-function getBrowserPassSemanticGuardReason(
-  args: {
-    testCase: any;
-    finalUrl: string;
-  }
-): string | null {
-  const caseText = [
-    args.testCase?.goal,
-    args.testCase?.successCriteria,
-    JSON.stringify(
-      args.testCase?.steps ?? []
-    ),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-
-  const hasJobCreationIntent =
-    [
-      "job creation",
-      "job-creation",
-      "create new job",
-      "completing job creation",
-      "successful job creation",
-    ].some((term) =>
-      caseText.includes(term)
-    );
-
-  const hasDetailsRedirectIntent =
-    caseText.includes("redirect") ||
-    caseText.includes(
-      "job details page"
-    ) ||
-    /\/company\/(?:all-)?jobs\/\{jobid\}/i.test(
-      caseText
-    );
-
-  if (
-    !hasJobCreationIntent ||
-    !hasDetailsRedirectIntent
-  ) {
-    return null;
-  }
-
-  let parsedUrl: URL;
-
-  try {
-    parsedUrl = new URL(
-      args.finalUrl
-    );
-  } catch {
-    return (
-      "manual required: the job-creation " +
-      "redirect could not be verified because " +
-      `the final URL is invalid: ${args.finalUrl}`
-    );
-  }
-
-  const pathname =
-    parsedUrl.pathname
-      .toLowerCase()
-      .replace(/\/+$/, "");
-
-  const detailsMatch =
-    pathname.match(
-      /^\/company\/(?:all-jobs|jobs)\/([^/]+)$/
-    );
-
-  const jobIdSegment =
-    String(
-      detailsMatch?.[1] || ""
-    ).trim();
-
-  const invalidDetailsSegments =
-    new Set([
-      "",
-      "create",
-      "new",
-      "edit",
-      "unknown",
-    ]);
-
-  const onConcreteJobDetailsRoute =
-    Boolean(detailsMatch) &&
-    !invalidDetailsSegments.has(
-      jobIdSegment
-    ) &&
-    !jobIdSegment.includes("{") &&
-    !jobIdSegment.includes("}");
-
-  if (!onConcreteJobDetailsRoute) {
-    return (
-      "manual required: job creation redirect " +
-      "was not proven; the final URL is not a " +
-      "concrete job details route: " +
-      args.finalUrl
-    );
-  }
-
-  const requiresProjectQuery =
-    caseText.includes(
-      "project query parameter"
-    ) ||
-    caseText.includes(
-      "project={projectid}"
-    ) ||
-    /[?&]project=\{projectid\}/i.test(
-      caseText
-    );
-
-  const projectId =
-    parsedUrl.searchParams
-      .get("project")
-      ?.trim();
-
-  if (
-    requiresProjectQuery &&
-    !projectId
-  ) {
-    return (
-      "manual required: the concrete job " +
-      "details route was reached, but the " +
-      "required project query parameter " +
-      "is missing."
-    );
-  }
-
-  const hasObsoleteJobIdQuery =
-    Array.from(
-      parsedUrl.searchParams.keys()
-    ).some(
-      (key) =>
-        key.toLowerCase() ===
-        "jobid"
-    );
-
-  if (hasObsoleteJobIdQuery) {
-    return (
-      "manual required: the final URL uses " +
-      "the obsolete jobId query parameter, " +
-      "so the expected redirect cannot be " +
-      "confirmed as passing."
-    );
-  }
-
-  return null;
-}
-
-function buildEvidenceReviewCase(
-  testCase: any
-): any {
-  const successCriteria =
-    String(
-      testCase?.successCriteria || ""
-    ).trim();
-
-  const legacyAutomatedCriteria =
-    successCriteria
-      .split(
-        /(?<=[.!?])\s+|\n+/
-      )
-      .map(
-        (sentence) =>
-          sentence.trim()
-      )
-      .filter(Boolean)
-      .filter(
-        (sentence) =>
-          !(
-            /\bmanual(?:_required|\s+required)\b/i.test(
-              sentence
-            ) ||
-            /\bchecked separately\b/i.test(
-              sentence
-            ) ||
-            /\bmust be checked separately\b/i.test(
-              sentence
-            ) ||
-            /\brequires? manual\b/i.test(
-              sentence
-            )
-          )
-      );
-
-  const automatedChecks =
-    Array.isArray(
-      testCase?.automatedChecks
-    )
-      ? testCase.automatedChecks
-          .map((check: unknown) =>
-            String(check ?? "").trim()
-          )
-          .filter(Boolean)
-      : [];
-
-  const reviewCriteria =
-    automatedChecks.length > 0
-      ? automatedChecks
-      : legacyAutomatedCriteria;
-
-  return {
-    ...testCase,
-    successCriteria:
-      reviewCriteria.join(" ") ||
-      String(testCase?.goal || ""),
-    automatedChecks:
-      reviewCriteria,
-    manualChecks:
-      Array.isArray(
-        testCase?.manualChecks
-      )
-        ? testCase.manualChecks
-        : [],
-    fixtureRequirements:
-      Array.isArray(
-        testCase?.fixtureRequirements
-      )
-        ? testCase.fixtureRequirements
-        : [],
-  };
-}
-
-function buildSuccessSignal(testCase: any): string {
-  const successCriteria = String(testCase.successCriteria || "").trim();
-  const goal = String(testCase.goal || "").trim();
-
-  if (successCriteria) return successCriteria;
-  if (goal) return goal;
-
-  return "Expected browser assertions pass without blocked execution.";
-}
-
-function statusFromNote(note: string): BrowserTraceStatus {
-  const lower = note.toLowerCase();
-
-  const structuredPrefix = lower.match(
-    /^(pass|fail|blocked|manual_required|error):/
-  )?.[1];
-
-  if (structuredPrefix === "pass") {
-    return "PASS";
-  }
-
-  if (structuredPrefix === "fail") {
-    return "FAIL";
-  }
-
-  if (structuredPrefix === "blocked") {
-    return "BLOCKED";
-  }
-
-  if (
-    structuredPrefix ===
-    "manual_required"
-  ) {
-    return "MANUAL_REQUIRED";
-  }
-
-  if (structuredPrefix === "error") {
-    return "ERROR";
-  }
-
-  const manualRequiredSignals = [
-    "manual required",
-    "not visible or not safely clickable",
-    "could not click",
-    "could not open",
-    "could not find",
-    "could not resolve",
-    "could not be resolved",
-    "no safe unselected option",
-    "could not be verified",
-    "was not safely clickable",
-    "fallback after",
-    "clicked likely panel/item trigger",
-  ];
-
-  if (
-    manualRequiredSignals.some(
-      (signal) => lower.includes(signal)
-    )
-  ) {
-    return "MANUAL_REQUIRED";
-  }
-
-  const explicitStatus =
-    lower.match(
-      /:\s*(pass|fail|blocked|error)\b/
-    );
-
-  if (
-    explicitStatus?.[1] === "pass"
-  ) {
-    return "PASS";
-  }
-
-  if (
-    explicitStatus?.[1] === "fail"
-  ) {
-    return "FAIL";
-  }
-
-  if (
-    explicitStatus?.[1] === "blocked"
-  ) {
-    return "BLOCKED";
-  }
-
-  if (
-    explicitStatus?.[1] === "error"
-  ) {
-    return "ERROR";
-  }
-
-  if (/^blocked\b/.test(lower)) {
-    return "BLOCKED";
-  }
-
-  if (/^error\b/.test(lower)) {
-    return "ERROR";
-  }
-
-  return "PASS";
-}
-
-function buildTraceFromBrowserRun(args: {
-  targetUrl: string;
-  finalUrl: string;
-  notes: string[];
-  screenshotPath?: string;
-  checkpointEvidence?:
-    BrowserEvidenceCheckpoint[];
-  finalStatus: BrowserTraceStatus;
-}): BrowserTraceStep[] {
-  const trace: BrowserTraceStep[] = [];
-
-  trace.push({
-    index: trace.length + 1,
-    action: "navigate",
-    status: "PASS",
-    note: `Navigated to ${args.targetUrl}`,
-    url: args.targetUrl,
-  });
-
-  for (const note of args.notes) {
-    trace.push({
-      index: trace.length + 1,
-      action: "browser-step",
-      status: statusFromNote(note),
-      note,
-      url: args.finalUrl,
-    });
-  }
-
-  for (
-    const checkpoint
-    of args.checkpointEvidence ?? []
-  ) {
-    trace.push({
-      index: trace.length + 1,
-      action: "evidence-checkpoint",
-      status: "PASS",
-      note:
-        `Checkpoint captured after step ` +
-        `${checkpoint.stepIndex}: ` +
-        `${checkpoint.label} -> ` +
-        `${checkpoint.screenshotPath}`,
-      url: checkpoint.url,
-    });
-  }
-
-  if (args.screenshotPath) {
-    trace.push({
-      index: trace.length + 1,
-      action: "screenshot",
-      status: "PASS",
-      note: `Screenshot captured: ${args.screenshotPath}`,
-      url: args.finalUrl,
-    });
-  }
-
-  trace.push({
-    index: trace.length + 1,
-    action: "final-status",
-    status: args.finalStatus,
-    note: `Final browser case status: ${args.finalStatus}`,
-    url: args.finalUrl,
-  });
-
-  return trace;
-}
-
-function formatTrace(trace: BrowserTraceStep[]): string {
-  return trace
-    .map((step) => {
-      const index = String(step.index).padStart(2, "0");
-      return `${index}. ${step.action} ${step.status} - ${step.note}`;
-    })
-    .join(" || ");
-}
-
-async function detectAuthWall(page: Page): Promise<boolean> {
-  const authWallTexts = [
-    "Continue to Scholars",
-    "Continue with Google",
-    "Email is required",
-    "name@email.com",
-    "Sign in",
-    "Log in",
-  ];
-
-  for (const text of authWallTexts) {
-    const visible = await page
-      .getByText(text, { exact: false })
-      .first()
-      .isVisible({ timeout: 1000 })
-      .catch(() => false);
-
-    if (visible) return true;
-  }
-
-  const currentUrl = page.url().toLowerCase();
-
-  return (
-    currentUrl.includes("login") ||
-    currentUrl.includes("signin") ||
-    currentUrl.includes("sign-in") ||
-    currentUrl.includes("auth")
-  );
-}
 
 async function collectKeyVisibleTexts(page: Page): Promise<string[]> {
   const candidates = [
@@ -1558,311 +234,11 @@ async function collectKeyVisibleTexts(page: Page): Promise<string[]> {
   return visibleTexts;
 }
 
-async function logVisibleAssessmentControls(
-  page: Page,
-  testCase: any
-): Promise<void> {
-  const caseText = getBrowserCaseText(testCase);
 
-  if (!caseText.includes("assessment")) {
-    return;
-  }
 
-  const labels = await page.evaluate(() => {
-    const selectors = [
-      "button",
-      "a",
-      '[role="button"]',
-      '[role="tab"]',
-      '[aria-label]',
-      "h1",
-      "h2",
-      "h3",
-    ];
 
-    const elements = Array.from(
-      document.querySelectorAll(
-        selectors.join(",")
-      )
-    ) as HTMLElement[];
 
-    const values = elements
-      .filter((element) => {
-        const rect =
-          element.getBoundingClientRect();
 
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.bottom > 0 &&
-          rect.top < window.innerHeight
-        );
-      })
-      .map((element) => {
-        return String(
-          element.getAttribute("aria-label") ||
-            element.innerText ||
-            element.textContent ||
-            ""
-        )
-          .replace(/\s+/g, " ")
-          .trim();
-      })
-      .filter((value) => {
-        return (
-          value.length > 0 &&
-          value.length <= 120
-        );
-      });
-
-    return Array.from(new Set(values))
-      .slice(0, 80);
-  });
-
-  console.log(
-    ` Assessment UI controls for ` +
-      `${testCase.id}: ` +
-      `${labels.join(" | ") || "none"}`
-  );
-}
-
-function browserEditFlowsAllowed(): boolean {
-  return (
-    process.env.QA_ALLOW_BROWSER_EDIT_FLOWS ===
-    "true"
-  );
-}
-
-/*
- * ASSESSMENT_LANGUAGE_PERSISTENCE_GUARD_V1
- *
- * Opening Edit, Configure or Level Adjustment is safe when
- * the case is observational and the runner exits with Cancel.
- * Only actions that can persist or submit changes require the
- * explicit edit-flow safety flag.
- */
-function hasAssessmentLanguagePersistMutationStep(
-  testCase: any
-): boolean {
-  const steps = Array.isArray(
-    testCase?.steps
-  )
-    ? testCase.steps
-    : [];
-
-  const persistenceText =
-    /\b(save|submit|update|create|delete|remove|confirm|approve|reject|publish|complete|upload|reupload|send)\b/i;
-
-  return steps.some((step: any) => {
-    const action = String(
-      step?.action || ""
-    ).trim();
-
-    if (
-      action ===
-      "createDraftJobAndVerifyRedirect"
-    ) {
-      return true;
-    }
-
-    if (
-      action !== "clickButton" &&
-      action !== "clickText"
-    ) {
-      return false;
-    }
-
-    return persistenceText.test(
-      String(step?.text || "").trim()
-    );
-  });
-}
-
-function isAssessmentLanguageCase(
-  testCase: any
-): boolean {
-  const caseText = [
-    String(testCase?.goal || ""),
-    String(
-      testCase?.successCriteria || ""
-    ),
-    JSON.stringify(
-      testCase?.steps ?? []
-    ),
-  ]
-    .join(" ")
-    .toLowerCase()
-    .replace(/[-_]+/g, " ");
-
-  return (
-    caseText.includes("assessment") &&
-    [
-      "language",
-      "proficiency",
-      "listening",
-      "speaking",
-      "writing",
-      "reading",
-    ].some((term) =>
-      caseText.includes(term)
-    )
-  );
-}
-
-function isAssessmentLanguageModalCase(
-  testCase: any
-): boolean {
-const caseText = [
-  String(testCase?.goal || ""),
-  String(
-    testCase?.successCriteria || ""
-  ),
-  ...(Array.isArray(
-    testCase?.automatedChecks
-  )
-    ? testCase.automatedChecks
-    : []),
-  ...(Array.isArray(
-    testCase?.manualChecks
-  )
-    ? testCase.manualChecks
-    : []),
-  ...(Array.isArray(
-    testCase?.fixtureRequirements
-  )
-    ? testCase.fixtureRequirements
-    : []),
-]
-  .map((value) =>
-    String(value || "")
-  )
-  .join(" ")
-  .toLowerCase()
-  .replace(/[-_]+/g, " ");
-
-  const steps = Array.isArray(
-    testCase?.steps
-  )
-    ? testCase.steps
-    : [];
-
-  const hasEditorNavigationStep =
-    steps.some((step: any) => {
-      if (
-        step?.action !== "clickButton"
-      ) {
-        return false;
-      }
-
-      const text = String(
-        step?.text || ""
-      )
-        .trim()
-        .toLowerCase();
-
-      return (
-        text === "configure" ||
-        text === "level adjustment"
-      );
-    });
-  const hasEditorScope =
-  caseText.includes(
-    "language requirements"
-  ) &&
-  [
-    "level adjustment",
-    "proficiency level",
-    "configure",
-    "edit state",
-    "edit assessment",
-    "editing",
-  ].some((term) =>
-    caseText.includes(term)
-  );
-
-  return (
-    isAssessmentLanguageCase(testCase) &&
-    (
- hasEditorNavigationStep ||
-hasEditorScope ||
-      [
-        "modal",
-        "editor",
-        "edit flow",
-        "edit assessment",
-        "editing",
-      ].some((term) =>
-        caseText.includes(term)
-      )
-    )
-  );
-}
-
-function ensureAssessmentLanguageReadOnlyNavigationStep(
-  testCase: any
-): void {
-  const caseText = [
-    String(testCase?.goal || ""),
-    String(
-      testCase?.successCriteria || ""
-    ),
-  ]
-    .join(" ")
-    .toLowerCase()
-    .replace(/[-_]+/g, " ");
-
-  const requiresReadOnlyDetailsState =
-    isAssessmentLanguageCase(testCase) &&
-    !isAssessmentLanguageModalCase(
-      testCase
-    ) &&
-    [
-      "details",
-      "detail",
-      "review",
-      "summary",
-    ].some((term) =>
-      caseText.includes(term)
-    );
-
-  if (!requiresReadOnlyDetailsState) {
-    return;
-  }
-
-  const steps = Array.isArray(
-    testCase?.steps
-  )
-    ? testCase.steps
-    : [];
-
-  const alreadyNavigatesToDetails =
-    steps.some(
-      (step: any) =>
-        step?.action === "clickTopTab" &&
-        /^details$/i.test(
-          String(
-            step?.text || ""
-          ).trim()
-        )
-    );
-
-  if (alreadyNavigatesToDetails) {
-    return;
-  }
-
-  testCase.steps = [
-    {
-      action: "clickTopTab",
-      text: "Details",
-    },
-    ...steps,
-  ];
-
-  console.log(
-    ` Assessment language read-only navigation ` +
-      `added for ${testCase.id}: Details`
-  );
-}
 
 function ensureTalentProfileLanguageNavigationStep(
   testCase: any
@@ -2058,2540 +434,12 @@ if (
   );
 }
 
-function ensureAssessmentLanguageEditorNavigationStep(
-  testCase: any
-): void {
-  if (
-    !isAssessmentLanguageModalCase(
-      testCase
-    )
-  ) {
-    return;
-  }
 
-  const steps = Array.isArray(
-    testCase?.steps
-  )
-    ? testCase.steps
-    : [];
 
-  const isEditorNavigationStep = (
-    step: any
-  ): boolean => {
-    if (
-      step?.action !== "clickButton"
-    ) {
-      return false;
-    }
 
-    const text = String(
-      step?.text || ""
-    )
-      .trim()
-      .toLowerCase();
 
-    return (
-      text === "configure" ||
-      text === "level adjustment"
-    );
-  };
 
-  testCase.steps = [
-    {
-      action: "clickButton",
-      text: "Configure",
-    },
-    {
-      action: "clickButton",
-      text: "Level Adjustment",
-    },
-    ...steps.filter(
-      (step: any) =>
-        !isEditorNavigationStep(step)
-    ),
-  ];
 
-  console.log(
-    ` Assessment language editor navigation ` +
-      `added for ${testCase.id}: ` +
-      `Configure -> Level Adjustment`
-  );
-}
-
-async function prepareAssessmentLanguageModal(
-  page: Page,
-  testCase: any
-): Promise<void> {
-  if (
-    !isAssessmentLanguageModalCase(testCase)
-  ) {
-    return;
-  }
-
-  if (
-    hasAssessmentLanguagePersistMutationStep(
-      testCase
-    ) &&
-    !browserEditFlowsAllowed()
-  ) {
-    console.log(
-      ` Assessment modal opener skipped for ` +
-        `${testCase.id}: the case contains a ` +
-        `persistent edit action and browser edit ` +
-        `flows are disabled by default.`
-    );
-
-    return;
-  }
-
-  console.log(
-    ` Assessment modal opener starting for ${testCase.id}`
-  );
-
-  let result = await clickSmartButton(
-    page,
-    "Edit"
-  );
-
-  if (!result.ok) {
-    result = await clickSmartText(
-      page,
-      "Edit"
-    );
-  }
-
-  console.log(
-    ` Assessment modal opener: ${result.note}`
-  );
-
-  if (!result.ok) {
-    console.log(
-      " Assessment modal opener could not click Edit."
-    );
-    return;
-  }
-
-  await page.waitForTimeout(1500);
-
-  await logVisibleAssessmentControls(
-    page,
-    {
-      ...testCase,
-      id: `${testCase.id}-after-edit`,
-    }
-  );
-}
-
-async function clickVisibleTextInMainArea(page: Page, text: string) {
-  const locator = page.getByText(new RegExp(`^${escapeRegExp(text)}$`, "i"));
-  const count = await locator.count();
-
-  for (let i = 0; i < count; i++) {
-    const item = locator.nth(i);
-    const visible = await item.isVisible({ timeout: 500 }).catch(() => false);
-    if (!visible) continue;
-
-    const box = await item.boundingBox();
-    if (!box) continue;
-
-    if (box.x > 220) {
-      await visualAction(page, item, "click");
-      await page.waitForTimeout(1000);
-      console.log(` Generic browser step clicked main-area text: ${text}`);
-      return true;
-    }
-  }
-  console.log(` Generic browser step could not find main-area text: ${text}`);
-  return false;
-}
-
-async function clickProjectDropdown(page: Page) {
-  const directCandidates = [
-    page.locator('[role="combobox"]').first(),
-    page.locator('[aria-haspopup="listbox"]').first(),
-    page.locator('[data-slot="select-trigger"]').first(),
-    page.locator(".ant-select-selector").first(),
-    page.locator("button").filter({ hasText: /select project/i }).first(),
-    page.locator("button").filter({ hasText: /project/i }).first(),
-  ];
-
-  for (const candidate of directCandidates) {
-    if (await candidate.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await visualAction(page, candidate, "click");
-      await page.waitForTimeout(1000);
-      console.log(" Generic browser step clicked project dropdown.");
-      return true;
-    }
-  }
-
-  const projectLabel = page.getByText(/^Project$/i).first();
-  const labelVisible = await projectLabel.isVisible({ timeout: 1000 }).catch(() => false);
-
-  if (labelVisible) {
-    const box = await projectLabel.boundingBox();
-
-    if (box) {
-      const targetX = box.x + 95;
-      const targetY = box.y + 42;
-
-      await page.mouse.move(targetX, targetY, { steps: 25 });
-      await page.waitForTimeout(200);
-      await page.mouse.click(targetX, targetY);
-      await page.waitForTimeout(1000);
-
-      console.log(" Generic browser step clicked project dropdown by sidebar position.");
-      return true;
-    }
-  }
-
-  console.log(" Generic browser step could not find project dropdown.");
-  return false;
-}
-
-async function selectLastDropdownOption(page: Page) {
-  await page.waitForTimeout(500);
-
-  const panelBox = await page.evaluate(() => {
-    const elements = Array.from(document.querySelectorAll("body *")) as HTMLElement[];
-
-    const panels = elements
-      .map((el) => {
-        const text = (el.innerText || el.textContent || "").trim();
-        const rect = el.getBoundingClientRect();
-
-        const visible =
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.bottom > 0 &&
-          rect.top < window.innerHeight &&
-          rect.right > 0 &&
-          rect.left < window.innerWidth;
-
-        return {
-          el,
-          text,
-          rect,
-          area: rect.width * rect.height,
-          visible,
-        };
-      })
-      .filter((item) => {
-        return (
-          item.visible &&
-          /showing\s+\d+\s+of\s+\d+\s+projects/i.test(item.text) &&
-          /search project/i.test(item.text) &&
-          item.rect.width >= 220 &&
-          item.rect.width <= 430 &&
-          item.rect.height >= 250
-        );
-      })
-      .sort((a, b) => a.area - b.area);
-
-    const panel = panels[0]?.el;
-
-    if (!panel) return null;
-
-    const descendants = [panel, ...Array.from(panel.querySelectorAll("*"))] as HTMLElement[];
-
-    const scrollable = descendants
-      .filter((el) => el.scrollHeight > el.clientHeight + 8)
-      .sort((a, b) => {
-        const aScrollable = a.scrollHeight - a.clientHeight;
-        const bScrollable = b.scrollHeight - b.clientHeight;
-        return bScrollable - aScrollable;
-      })[0];
-
-    if (scrollable) {
-      scrollable.scrollTop = scrollable.scrollHeight;
-    } else {
-      panel.scrollTop = panel.scrollHeight;
-    }
-
-    const rect = panel.getBoundingClientRect();
-
-    return {
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    };
-  });
-
-  if (!panelBox) {
-    console.log(" Generic browser step could not locate project dropdown panel.");
-
-    await page.screenshot({
-      path: "qa-results/evidence/debug-project-dropdown-options.png",
-      fullPage: true,
-    });
-
-    return false;
-  }
-
-  await page.waitForTimeout(800);
-
-  const candidate = await page.evaluate((box) => {
-    const blockedTexts = ["create project", "search project", "showing", "project"];
-
-    const elements = Array.from(document.querySelectorAll("body *")) as HTMLElement[];
-
-    const items = elements
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const text = (el.innerText || el.textContent || "")
-          .replace(/\s+/g, " ")
-          .trim();
-
-        return {
-          text,
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        };
-      })
-      .filter((item) => {
-        if (!item.text) return false;
-        if (item.text.length > 80) return false;
-        if (item.width <= 0 || item.height <= 0) return false;
-
-        if (item.x < box.x || item.x > box.x + box.width) return false;
-        if (item.y < box.y + 75 || item.y > box.y + box.height - 45) return false;
-
-        const lower = item.text.toLowerCase();
-
-        if (blockedTexts.some((blocked) => lower.includes(blocked))) {
-          return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => b.y - a.y);
-
-    return items[0] || null;
-  }, panelBox);
-
-  if (!candidate) {
-    console.log(" Generic browser step could not find last project item inside dropdown panel.");
-
-    await page.screenshot({
-      path: "qa-results/evidence/debug-project-dropdown-options.png",
-      fullPage: true,
-    });
-
-    return false;
-  }
-
-  await page.mouse.move(
-    candidate.x + candidate.width / 2,
-    candidate.y + candidate.height / 2,
-    { steps: 25 }
-  );
-
-  await page.waitForTimeout(200);
-
-  await page.mouse.click(
-    candidate.x + candidate.width / 2,
-    candidate.y + candidate.height / 2
-  );
-
-  await page.waitForTimeout(1000);
-
-  const verified = await page.evaluate((selectedText) => {
-    const expected = String(selectedText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
-
-    const elements = Array.from(document.querySelectorAll("body *")) as HTMLElement[];
-
-    return elements.some((el) => {
-      const text = (el.innerText || el.textContent || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-
-      const rect = el.getBoundingClientRect();
-
-      return (
-        text === expected &&
-        rect.width > 0 &&
-        rect.height > 0 &&
-        rect.x >= 0 &&
-        rect.x < 230 &&
-        rect.y > 100 &&
-        rect.y < 650
-      );
-    });
-  }, candidate.text);
-
-  if (!verified) {
-    console.log(
-      ` Generic browser step clicked "${candidate.text}" but could not verify it became selected.`
-    );
-
-    await page.screenshot({
-      path: "qa-results/evidence/debug-project-dropdown-selection.png",
-      fullPage: true,
-    });
-
-    return false;
-  }
-
-  console.log(
-    ` Generic browser step selected and verified last dropdown item: ${candidate.text}`
-  );
-
-  return true;
-}
-
-function getBrowserCaseText(testCase: any): string {
-  const stepText = Array.isArray(testCase.steps)
-    ? testCase.steps
-        .map((step: any) => [step.action, step.text].filter(Boolean).join(" "))
-        .join(" ")
-    : "";
-
-  return [testCase.goal, testCase.successCriteria, stepText]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-function inferBrowserAreaFromText(
-  rawText: string
-): BrowserArea | undefined {
-  const text = String(rawText || "")
-    .trim()
-    .toLowerCase();
-
-  if (!text) {
-    return undefined;
-  }
-
-  if (text.includes("assessment")) {
-    return "assessments";
-  }
-
-  /*
-   * Specific feature areas must be evaluated before
-   * generic relationship words such as "job".
-   */
-  if (text.includes("talent pool")) {
-    return "talent-pool";
-  }
-
-  if (
-    text.includes("job change request") ||
-    text.includes("job review") ||
-    text.includes("job details") ||
-    text.includes("job list") ||
-    /\bjob\b/.test(text)
-  ) {
-    return "jobs";
-  }
-
-/*
- * Work Setup terminology may appear alongside
- * negative legacy-name assertions such as
- * "without onboarding-document naming".
- *
- * The concrete feature must win over the legacy
- * area mentioned only as an excluded term.
- */
-if (
-  text.includes("work setup") ||
-  text.includes("work-setup")
-) {
-  return "work-setups";
-}
-
-if (text.includes("onboarding")) {
-  return "onboarding";
-}
-
-if (
-  text.includes(
-    "skills and languages profile"
-  ) ||
-  text.includes("profile tab") ||
-  text.includes("talent profile")
-) {
-  return "talent-profile";
-}
-
-  if (
-    text.includes("payment") ||
-    text.includes("payout") ||
-    text.includes("timesheet")
-  ) {
-    return "payments";
-  }
-
-  if (text.includes("contract")) {
-    return "contracts";
-  }
-
-  if (text.includes("offer")) {
-    return "offers";
-  }
-
-  if (
-    text.includes("skill selector") ||
-    text.includes("skills page") ||
-    text.includes("selected skills")
-  ) {
-    return "skills";
-  }
-
-  if (text.includes("language")) {
-    return "languages";
-  }
-
-  return undefined;
-}
-
-function getPositiveBrowserStepText(
-  testCase: any
-): string {
-  if (!Array.isArray(testCase?.steps)) {
-    return "";
-  }
-
-  return testCase.steps
-    .filter(
-      (step: any) =>
-        step?.action !==
-        "assertTextNotVisible"
-    )
-    .map(
-      (step: any) =>
-        [
-          step?.action,
-          step?.text,
-        ]
-          .filter(Boolean)
-          .join(" ")
-    )
-    .join(" ");
-}
-
-function getPositiveSuccessCriteriaText(
-  testCase: any
-): string {
-  const criteria = String(
-    testCase?.successCriteria || ""
-  );
-
-  /*
-   * Negative oracle clauses describe what must
-   * not be present. They must not redefine the
-   * intended feature area.
-   */
-  return criteria
-    .split(/[.!?]+/)
-    .filter((clause) => {
-      const normalized =
-        clause.trim().toLowerCase();
-
-      if (!normalized) {
-        return false;
-      }
-
-      return !(
-        /\bmust not\b/.test(normalized) ||
-        /\bshould not\b/.test(normalized) ||
-        /\bdoes not\b/.test(normalized) ||
-        /\bdo not\b/.test(normalized) ||
-        /\bnot displayed\b/.test(normalized) ||
-        /\bnot visible\b/.test(normalized) ||
-        /\babsent\b/.test(normalized) ||
-        /\bprohibited\b/.test(normalized) ||
-        /\brather than\b/.test(normalized) ||
-        /\binstead of\b/.test(normalized)
-      );
-    })
-    .join(" ");
-}
-
-function inferBrowserCaseArea(
-  testCase: any
-): BrowserArea | undefined {
-  /*
-   * Source priority:
-   *
-   * 1. The explicit goal defines the feature.
-   * 2. Positive executable steps provide evidence.
-   * 3. Positive success-criteria clauses are fallback.
-   *
-   * Negative assertions are deliberately excluded.
-   */
-  const inferenceSources = [
-    String(testCase?.goal || ""),
-    getPositiveBrowserStepText(testCase),
-    getPositiveSuccessCriteriaText(
-      testCase
-    ),
-  ];
-
-  for (const source of inferenceSources) {
-    const area =
-      inferBrowserAreaFromText(source);
-
-    if (area) {
-      return area;
-    }
-  }
-
-  return undefined;
-}
-
-function inferBrowserRouteArea(
-  startRoute: string
-): BrowserArea | undefined {
-  const route = String(startRoute || "")
-    .split("?")[0]!
-    .toLowerCase();
-
-  if (!route || route === "unknown") {
-    return undefined;
-  }
-
-  if (route.includes("assessment")) {
-    return "assessments";
-  }
-
-  if (route.includes("work-setup")) {
-    return "work-setups";
-  }
-
-  if (
-    route.includes("payment") ||
-    route.includes("timesheet")
-  ) {
-    return "payments";
-  }
-
-  if (route.includes("contract")) {
-    return "contracts";
-  }
-
-  if (route.includes("offer")) {
-    return "offers";
-  }
-
-  if (
-    route.includes("talent-pool") ||
-    route.includes("/company/talents")
-  ) {
-    return "talent-pool";
-  }
-
-  if (route.includes("onboarding")) {
-    return "onboarding";
-  }
-
-  if (
-    route.includes("/talent/profile") ||
-    route.includes("profile")
-  ) {
-    return "talent-profile";
-  }
-
-  if (route.includes("skills")) {
-    return "skills";
-  }
-
-  if (route.includes("jobs")) {
-    return "jobs";
-  }
-
-  return undefined;
-}
-
-function areBrowserAreasCompatible(
-  wantedArea: BrowserArea,
-  selectedArea: BrowserArea
-): boolean {
-  if (wantedArea === selectedArea) {
-    return true;
-  }
-
-  const compatibleRoutes: Record<
-    BrowserArea,
-    Set<BrowserArea>
-  > = {
-    assessments: new Set(["assessments", "jobs"]),
-    languages: new Set([
-      "languages",
-      "talent-profile",
-      "onboarding",
-      "assessments",
-    ]),
-    skills: new Set([
-      "skills",
-      "jobs",
-      "talent-profile",
-    ]),
-    jobs: new Set(["jobs"]),
-    "work-setups": new Set([
-      "work-setups",
-      "jobs",
-      "contracts",
-    ]),
-    payments: new Set(["payments"]),
-    contracts: new Set(["contracts", "jobs"]),
-    offers: new Set(["offers", "jobs"]),
-    "talent-pool": new Set(["talent-pool"]),
-    onboarding: new Set(["onboarding"]),
-    "talent-profile": new Set(["talent-profile"]),
-  };
-
-  return compatibleRoutes[wantedArea].has(selectedArea);
-}
-
-function getBrowserRelevanceBlockReason(
-  testCase: any
-): string | null {
-  const wantedArea =
-    inferBrowserCaseArea(testCase);
-
-  const selectedArea =
-    inferBrowserRouteArea(testCase.startRoute);
-
-  /**
-   * V1 is conservative:
-   * unknown intent or unknown route area is not rejected.
-   */
-  if (!wantedArea || !selectedArea) {
-    return null;
-  }
-
-  if (
-    areBrowserAreasCompatible(
-      wantedArea,
-      selectedArea
-    )
-  ) {
-    return null;
-  }
-
-  return (
-    `Browser relevance gate rejected ` +
-    `${testCase.id || "case"}: ` +
-    `expected area=${wantedArea}, ` +
-    `selected area=${selectedArea}, ` +
-    `route=${testCase.startRoute}`
-  );
-}
-
-function isComplexDropdownCase(testCase: any): boolean {
-  const text = getBrowserCaseText(testCase);
-
-  const mentionsDropdown =
-    text.includes("dropdown") ||
-    text.includes("selector") ||
-    text.includes("select issue") ||
-    text.includes("last item") ||
-    text.includes("scrollable") ||
-    text.includes("scroll inside");
-
-  const mentionsProjectOrSelection =
-    text.includes("project") ||
-    text.includes("select") ||
-    text.includes("selection");
-
-  return mentionsDropdown && mentionsProjectOrSelection;
-}
-
-function isMenuOrFilterCase(testCase: any): boolean {
-  const text = getBrowserCaseText(testCase);
-
-  return (
-    text.includes("filter") ||
-    text.includes("filters") ||
-    text.includes("sort") ||
-    text.includes("sorting") ||
-    text.includes("dropdown") ||
-    text.includes("menu") ||
-    text.includes("newest") ||
-    text.includes("latest") ||
-    text.includes("oldest") ||
-    text.includes("processed by") ||
-    text.includes("paid on") ||
-    text.includes("work period") ||
-    text.includes("submit by") ||
-    text.includes("approved by")
-  );
-}
-
-function buildManualRequiredNotesForFailedAssertions(
-  notes: string[],
-  testCase: any
-): string[] {
-  const caseText = getBrowserCaseText(testCase);
-
-  if (isMenuOrFilterCase(testCase)) {
-    const reason =
-      "One or more assertions failed in a menu/filter/sort/dropdown or deep-detail UI case. Manual verification is required before treating this as a product bug.";
-
-    if (caseText.includes("filter") || caseText.includes("sort")) {
-      return [
-        ...notes,
-        reason,
-        "Generic browser runner may not have opened the correct nested filter/sort menu or dropdown options.",
-      ];
-    }
-
-    return [...notes, reason];
-  }
-
-  return [
-    ...notes,
-    "One or more assertions failed after a generic browser action limitation. Manual verification is required before treating this as a product bug.",
-  ];
-}
-
-async function isBrowserTextVisible(
-  page: Page,
-  text: string
-): Promise<boolean> {
-  const normalized =
-    String(text || "").trim();
-
-  if (!normalized) {
-    return false;
-  }
-
-  const regex = new RegExp(
-    escapeRegExp(normalized)
-      .replace(/\\\s+/g, "\\s+"),
-    "i"
-  );
-
-  /*
-   * Search the active drawer/dialog first. A hidden duplicate
-   * elsewhere in the DOM must not make a visible assertion
-   * fail merely because it is the locator's first match.
-   */
-  const scopes = [
-    page.getByRole("dialog"),
-
-    page.locator(
-      '[data-radix-dialog-content]'
-    ),
-
-    page.locator(
-      '[data-state="open"]'
-    ),
-
-    page.locator(
-      [
-        '[class*="drawer"]',
-        '[class*="Drawer"]',
-        '[class*="sheet"]',
-        '[class*="Sheet"]',
-      ].join(", ")
-    ),
-
-    page.locator("main"),
-
-    page.locator("body"),
-  ];
-
-  for (const scope of scopes) {
-    const matches =
-      scope.getByText(regex);
-
-    const count = Math.min(
-      await matches
-        .count()
-        .catch(() => 0),
-      30
-    );
-
-    for (
-      let index = 0;
-      index < count;
-      index += 1
-    ) {
-      const visible =
-        await matches
-          .nth(index)
-          .isVisible()
-          .catch(() => false);
-
-      if (visible) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-async function runGenericBrowserSteps(
-  page: Page,
-  testCase: any,
-  captureCheckpoint?:
-    BrowserCheckpointCapture,
-  registerDeferredCleanup?:
-    (
-cleanup: DeferredCleanup
-    ) => void
-): Promise<BrowserStepResult> {
-  const steps = testCase.steps as BrowserStep[] | undefined;
-  const notes: string[] = [];
-
-  const deterministicEvidence:
-    BrowserDeterministicEvidence[] = [];
-
-  if (!Array.isArray(steps) || steps.length === 0) {
-    const note =
-      "No structured browser steps provided. Screenshot-only browser cases require manual verification.";
-    console.log(` Generic browser steps: ${note}`);
-
-    return {
-      status: "MANUAL_REQUIRED",
-      reasonCategory: "NO_STRUCTURED_STEPS",
-      notes: [note],
-    };
-  }
-
-  let hasAssertion = false;
-  let hasAcceptanceAssertion = false;
-  let hasPositiveAcceptanceAssertion = false;
-  let hasFailedAssertion = false;
-  let needsManualVerification = false;
-  let hasActionLimitation = false;
-
-  const caseText = getBrowserCaseText(testCase);
-
-const permissionRelevantSuccessCriteria =
-  String(
-    testCase?.successCriteria || ""
-  )
-    .split(
-      /(?:[.!?]\s+|\n+)/
-    )
-    .filter(
-      (sentence) =>
-        !/\bmanual(?:_required|\s+required)\b/i.test(
-          sentence
-        )
-    )
-    .join(" ");
-
-const permissionRelevantCaseText = [
-  String(testCase?.goal || ""),
-  permissionRelevantSuccessCriteria,
-  ...steps.map(
-    (step: any) =>
-      [
-        String(step?.action || ""),
-        String(step?.text || ""),
-      ].join(" ")
-  ),
-]
-  .join(" ")
-  .toLowerCase();
-
-const isPermissionSensitiveCase = [
-  "permission",
-  "has permission",
-  "without permission",
-  "with permission",
-  "lacks permission",
-  "can directly",
-  "cannot directly",
-  "allowed to",
-  "not allowed to",
-].some(
-  (phrase) =>
-    permissionRelevantCaseText.includes(
-      phrase
-    )
-);
-
-  function isSanityAssertionText(
-    value: string
-  ): boolean {
-    const normalized = value
-      .trim()
-      .toLowerCase();
-
-    return [
-      "undefined",
-      "null",
-      "nan",
-      "[object object]",
-      "something went wrong",
-      "unexpected error",
-    ].includes(normalized);
-  }
-
-  const requiresPanelOrModal =
-    caseText.includes("modal") ||
-    caseText.includes("details") ||
-    caseText.includes("detail") ||
-    caseText.includes("panel") ||
-    caseText.includes("review") ||
-    caseText.includes("upload") ||
-    caseText.includes("reupload") ||
-    caseText.includes("dialog") ||
-    caseText.includes("form") ||
-    caseText.includes("wizard") ||
-    caseText.includes("step") ||
-    caseText.includes("attached");
-
-  async function tryOpenLikelyFallback(reason: string) {
-    if (!requiresPanelOrModal) return;
-
-    const note =
-      `${reason}: skipped ambiguous fallback; ` +
-      `no unrelated panel or item was clicked`;
-
-    notes.push(note);
-    console.log(` Generic browser step ${note}`);
-
-    hasActionLimitation = true;
-  }
-
-  async function findVisibleActionsButton():
-    Promise<Locator | null> {
-    const candidates =
-      page.getByRole("button", {
-        name: /actions/i,
-      });
-
-    const count = Math.min(
-      await candidates
-        .count()
-        .catch(() => 0),
-      5
-    );
-
-    for (
-      let index = 0;
-      index < count;
-      index += 1
-    ) {
-      const candidate =
-        candidates.nth(index);
-
-      const visible = await candidate
-        .isVisible()
-        .catch(() => false);
-
-      if (visible) {
-        return candidate;
-      }
-    }
-
-    return null;
-  }
-
-  async function captureVisibleActionsSurfaces(
-    actionButton: Locator
-  ): Promise<string[]> {
-    return actionButton
-      .evaluate((buttonElement) => {
-        if (
-          !(buttonElement instanceof HTMLElement)
-        ) {
-          return [];
-        }
-
-        const anchor =
-          buttonElement.getBoundingClientRect();
-
-        const descriptors: string[] = [];
-
-        const elements =
-          Array.from(
-            document.querySelectorAll<HTMLElement>(
-              "body *"
-            )
-          );
-
-        for (const element of elements) {
-          if (
-            element === buttonElement ||
-            buttonElement.contains(element) ||
-            element.contains(buttonElement)
-          ) {
-            continue;
-          }
-
-          const role =
-            element.getAttribute("role") ||
-            "";
-
-          const dataState =
-            element.getAttribute("data-state") ||
-            "";
-
-          const className =
-            typeof element.className === "string"
-              ? element.className
-              : "";
-
-          const style =
-            window.getComputedStyle(element);
-
-          const knownMenuSignal =
-            [
-              "menu",
-              "menuitem",
-              "listbox",
-              "option",
-            ].includes(role) ||
-            dataState === "open" ||
-            /menu|popover|dropdown|popup|popper/i
-              .test(className);
-
-          const floatingPosition =
-            style.position === "absolute" ||
-            style.position === "fixed";
-
-          if (
-            !knownMenuSignal &&
-            !floatingPosition
-          ) {
-            continue;
-          }
-
-          if (
-            style.display === "none" ||
-            style.visibility === "hidden" ||
-            Number(style.opacity) === 0
-          ) {
-            continue;
-          }
-
-          const rect =
-            element.getBoundingClientRect();
-
-          if (
-            rect.width < 20 ||
-            rect.height < 20 ||
-            rect.width > 700 ||
-            rect.height > 900
-          ) {
-            continue;
-          }
-
-          const text =
-            element.innerText
-              .replace(/\s+/g, " ")
-              .trim();
-
-          if (!text) {
-            continue;
-          }
-
-          const interactiveCount =
-            element.querySelectorAll(
-              [
-                "button",
-                "a",
-                '[role="button"]',
-                '[role="menuitem"]',
-                '[role="option"]',
-              ].join(", ")
-            ).length;
-
-          const elementIsInteractive =
-            [
-              "menuitem",
-              "option",
-            ].includes(role);
-
-          if (
-            interactiveCount === 0 &&
-            !elementIsInteractive
-          ) {
-            continue;
-          }
-
-          const horizontalGap =
-            Math.max(
-              0,
-              rect.left - anchor.right,
-              anchor.left - rect.right
-            );
-
-          const verticalGap =
-            Math.max(
-              0,
-              rect.top - anchor.bottom,
-              anchor.top - rect.bottom
-            );
-
-          if (
-            horizontalGap > 300 ||
-            verticalGap > 300
-          ) {
-            continue;
-          }
-
-          descriptors.push(
-            [
-              role || "no-role",
-              dataState || "no-state",
-              style.position,
-              Math.round(rect.left),
-              Math.round(rect.top),
-              Math.round(rect.width),
-              Math.round(rect.height),
-              text.slice(0, 250),
-            ].join("|")
-          );
-        }
-
-        return descriptors;
-      })
-      .catch(() => []);
-  }
-
-  async function controlledActionsSurfaceIsVisible(
-    actionButton: Locator
-  ): Promise<boolean> {
-    return actionButton
-      .evaluate((buttonElement) => {
-        if (
-          !(buttonElement instanceof HTMLElement)
-        ) {
-          return false;
-        }
-
-        const controlledId =
-          buttonElement.getAttribute(
-            "aria-controls"
-          ) ||
-          buttonElement.getAttribute(
-            "aria-owns"
-          );
-
-        if (!controlledId) {
-          return false;
-        }
-
-        const controlled =
-          document.getElementById(
-            controlledId
-          );
-
-        if (
-          !(controlled instanceof HTMLElement)
-        ) {
-          return false;
-        }
-
-        const style =
-          window.getComputedStyle(
-            controlled
-          );
-
-        const rect =
-          controlled.getBoundingClientRect();
-
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          Number(style.opacity) !== 0 &&
-          rect.width >= 20 &&
-          rect.height >= 20
-        );
-      })
-      .catch(() => false);
-  }
-
-  async function prepareActionsMenuForAssertion(
-    assertedText: string
-  ): Promise<{
-    ok: boolean;
-    note: string;
-  } | null> {
-    const normalizedText =
-      String(assertedText || "")
-        .trim()
-        .toLowerCase();
-
-    if (
-      normalizedText !==
-        "request publish"
-    ) {
-      return null;
-    }
-
-    /*
-     * Close stale menus first so that the verification
-     * always measures the state created by this click.
-     */
-    await page.keyboard
-      .press("Escape")
-      .catch(() => undefined);
-
-    await page.waitForTimeout(200);
-
-    const actionButton =
-      await findVisibleActionsButton();
-
-    if (!actionButton) {
-      return {
-        ok: false,
-        note:
-          "visible Actions button could not be found",
-      };
-    }
-
-    const surfacesBefore =
-      await captureVisibleActionsSurfaces(
-        actionButton
-      );
-
-    try {
-      await actionButton
-        .scrollIntoViewIfNeeded({
-          timeout: 1000,
-        });
-
-      await actionButton.click({
-        timeout: 1500,
-      });
-    } catch {
-      return {
-        ok: false,
-        note:
-          "Actions button was visible but could not be clicked safely",
-      };
-    }
-
-    await page.waitForTimeout(600);
-
-    const expanded =
-      await actionButton
-        .getAttribute("aria-expanded")
-        .catch(() => null);
-
-    const controlledSurfaceVisible =
-      await controlledActionsSurfaceIsVisible(
-        actionButton
-      );
-
-    const surfacesAfter =
-      await captureVisibleActionsSurfaces(
-        actionButton
-      );
-
-    const newSurfaces =
-      surfacesAfter.filter(
-        (surface) =>
-          !surfacesBefore.includes(
-            surface
-          )
-      );
-
-    const verified =
-      expanded === "true" ||
-      controlledSurfaceVisible ||
-      newSurfaces.length > 0;
-
-    console.log(
-      " Actions menu verification: " +
-        `aria-expanded=${expanded || "none"}, ` +
-        `controlled-visible=${controlledSurfaceVisible}, ` +
-        `surfaces-before=${surfacesBefore.length}, ` +
-        `surfaces-after=${surfacesAfter.length}, ` +
-        `new-surfaces=${newSurfaces.length}`
-    );
-
-    if (!verified) {
-      console.log(
-        " Actions menu verification surfaces: " +
-          JSON.stringify(
-            surfacesAfter.slice(0, 5)
-          )
-      );
-
-      return {
-        ok: false,
-        note:
-          "clicked Actions but no newly opened menu surface was verified",
-      };
-    }
-
-    return {
-      ok: true,
-      note:
-        "opened and verified Actions menu for Request Publish assertion",
-    };
-  }
-
-  for (
-    let stepOffset = 0;
-    stepOffset < steps.length;
-    stepOffset += 1
-  ) {
-    const step = steps[stepOffset];
-
-    if (!step) {
-      continue;
-    }
-
-    const stepIndex = stepOffset + 1;
-
-    /*
-     * Prevent one entity interaction from leaking its
-     * identity into a later unrelated checkpoint.
-     */
-    delete testCase.runtimeEvidenceIdentity;
-
-    if (step.action === "wait") {
-      await page.waitForTimeout(step.ms);
-      notes.push(`wait ${step.ms}ms`);
-      continue;
-    }
-
-    if (step.action === "setViewport") {
-      await page.setViewportSize({
-        width: step.width,
-        height: step.height,
-      });
-
-      await page.waitForTimeout(1000);
-
-      const note = `setViewport ${step.width}x${step.height}`;
-      notes.push(note);
-      console.log(` Generic browser step ${note}`);
-
-      continue;
-    }
-
-    if (
-      step.action ===
-      "selectRuntimeTopTab"
-    ) {
-      const result =
-        await selectRuntimeTopTab(
-          page
-        );
-
-      notes.push(result.note);
-
-      console.log(
-        ` Generic browser step ` +
-          `${result.note}`
-      );
-
-      if (!result.ok) {
-        notes.push(
-          `manual required: a safe inactive ` +
-            `main-content tab could not be ` +
-            `discovered, selected and verified; ` +
-            `remaining assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-          deterministicEvidence,
-        };
-      }
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (step.action === "clickTopTab") {
-      const result = await clickSmartText(page, step.text);
-
-      notes.push(result.note);
-      console.log(` Generic browser step ${result.note}`);
-
-      if (!result.ok) {
-        hasActionLimitation = true;
-
-        await tryOpenLikelyFallback(
-          `fallback after clickTopTab "${step.text}"`
-        );
-
-        notes.push(
-          `manual required: prerequisite tab action failed; ` +
-            `remaining assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-await page.waitForTimeout(1000);
-
-await captureCheckpoint?.({
-  stepIndex,
-  step,
-  note: result.note,
-});
-
-continue;
-    }
-
-    if (
-      step.action ===
-      "createDraftJobAndVerifyRedirect"
-    ) {
-      const result =
-        await createDraftJobAndVerifyRedirect(
-          page,
-          {
-            caseId: String(
-              testCase.id || "browser"
-            ),
-            origin: step.origin,
-          }
-        );
-
-      if (result.deferredCleanup) {
-        registerDeferredCleanup?.(
-          result.deferredCleanup
-        );
-      }
-
-      const resultNote =
-        result.status === "PASS"
-          ? result.note
-          : `${result.status}: ${result.reasonCategory}: ${result.note}`;
-
-      notes.push(resultNote);
-
-      console.log(
-        ` Draft job browser interaction: ` +
-          resultNote
-      );
-
-      if (result.status !== "PASS") {
-        return {
-          status: result.status,
-          reasonCategory:
-            result.reasonCategory,
-          notes,
-          deterministicEvidence,
-        };
-      }
-
-      await page.waitForTimeout(750);
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (step.action === "clickButton") {
-      const result = await clickSmartButton(page, step.text);
-
-      notes.push(result.note);
-      console.log(` Generic browser step ${result.note}`);
-
-      if (!result.ok) {
-        hasActionLimitation = true;
-
-        await tryOpenLikelyFallback(
-          `fallback after clickButton "${step.text}"`
-        );
-
-        notes.push(
-          `manual required: prerequisite button action failed; ` +
-            `remaining assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-      await page.waitForTimeout(1000);
-      continue;
-    }
-
-    if (step.action === "openMenu") {
-      const result = await openSmartMenu(
-        page,
-        step.text
-      );
-
-      notes.push(result.note);
-      console.log(
-        ` Generic browser step ${result.note}`
-      );
-
-      if (!result.ok) {
-        notes.push(
-          `manual required: menu trigger "${step.text}" ` +
-            `could not be opened and verified; remaining ` +
-            `assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-      await page.waitForTimeout(500);
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (
-      step.action ===
-      "openRuntimeControl"
-    ) {
-      const result =
-        await openRuntimeControl(
-          page,
-          step.target
-        );
-
-      notes.push(result.note);
-
-      console.log(
-        ` Generic browser step ` +
-          `${result.note}`
-      );
-
-      deterministicEvidence.push({
-        stepIndex,
-        action: "openRuntimeControl",
-        expected:
-          `Open interactive control ` +
-          `"${step.target}" and verify its ` +
-          `expanded surface`,
-        passed: result.ok,
-        note: result.note,
-      });
-
-      if (!result.ok) {
-        notes.push(
-          `manual required: runtime control ` +
-            `"${step.target}" could not be ` +
-            `opened with a deterministic ` +
-            `expanded-surface signal; remaining ` +
-            `assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-          deterministicEvidence,
-        };
-      }
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (
-      step.action ===
-      "selectRuntimeFilterOption"
-    ) {
-      const result =
-        await selectRuntimeFilterOption(
-          page,
-          step.queryKey,
-          step.hint
-        );
-
-      notes.push(result.note);
-
-      console.log(
-        ` Generic browser step ` +
-          `${result.note}`
-      );
-
-      if (!result.ok) {
-        notes.push(
-          `manual required: a safe runtime ` +
-            `filter option for query key ` +
-            `"${step.queryKey}" could not be ` +
-            `selected with a verified URL ` +
-            `transition; remaining assertions ` +
-            `were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-          deterministicEvidence,
-        };
-      }
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (step.action === "selectOption") {
-      const result = await selectSmartOption(
-        page,
-        step.text
-      );
-
-      notes.push(result.note);
-      console.log(
-        ` Generic browser step ${result.note}`
-      );
-
-      if (!result.ok) {
-        notes.push(
-          `manual required: menu option "${step.text}" ` +
-            `could not be selected safely; remaining ` +
-            `assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-      await page.waitForTimeout(500);
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note: result.note,
-      });
-
-      continue;
-    }
-
-    if (step.action === "clickProjectDropdown") {
-      const clicked = await clickProjectDropdown(page);
-
-      if (clicked) {
-        notes.push("clicked project dropdown");
-      } else {
-        notes.push("manual required: could not open project dropdown reliably");
-        hasActionLimitation = true;
-        needsManualVerification = true;
-      }
-
-      continue;
-    }
-
-    if (step.action === "selectLastDropdownOption") {
-      const selected = await selectLastDropdownOption(page);
-
-      if (selected) {
-        notes.push("selected last dropdown option");
-      } else {
-        notes.push(
-          "manual required: could not reliably scroll/select/verify the last dropdown option"
-        );
-        hasActionLimitation = true;
-        needsManualVerification = true;
-      }
-
-      continue;
-    }
-
-    if (step.action === "clickText") {
-      if (
-        isInvoiceRowClickRequest(
-          testCase,
-          step.text
-        )
-      ) {
-        const invoiceResult =
-          await resolveAndOpenInvoiceRow(
-            page,
-            testCase,
-            step.text
-          );
-
-        notes.push(invoiceResult.note);
-
-        console.log(
-          ` Invoice browser interaction: ` +
-            invoiceResult.note
-        );
-
-        if (
-          invoiceResult.status ===
-          "OPENED"
-        ) {
-          deterministicEvidence.push({
-            stepIndex,
-            action:
-              "resolveRuntimeInvoiceFixture",
-            expected:
-              `Open an invoice from required ` +
-              `table view=${
-                invoiceResult
-                  .requiredTableView ||
-                "current"
-              }`,
-            passed: true,
-            note:
-              `requested=${
-                invoiceResult
-                  .requestedInvoice ||
-                "none"
-              }; selected=${
-                invoiceResult
-                  .selectedInvoice
-              }; requiredView=${
-                invoiceResult
-                  .requiredTableView ||
-                "current"
-              }; selectedView=${
-                invoiceResult
-                  .selectedTableView ||
-                "current"
-              }; exactMatch=${
-                invoiceResult
-                  .exactInvoiceMatched
-              }`,
-          });
-
-          await page.waitForTimeout(700);
-
-          /*
-           * Screenshot only. No drawer scrolling, DOM
-           * mutation or React-controlled interaction.
-           */
-          await captureCheckpoint?.({
-            stepIndex,
-            step,
-            note:
-              `${invoiceResult.note}; ` +
-              `invoice drawer opened`,
-          });
-
-          continue;
-        }
-
-        if (
-          invoiceResult.status ===
-          "TEST_DATA_ISSUE"
-        ) {
-          return {
-            status: "BLOCKED",
-            reasonCategory:
-              "TEST_DATA_ISSUE",
-            notes,
-          };
-        }
-
-        hasActionLimitation = true;
-        needsManualVerification = true;
-
-        notes.push(
-          `manual required: invoice prerequisite state was not reached; ` +
-            `remaining assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-      if (
-        isChangeRequestRowDetailClickRequest(
-          testCase,
-          step.text
-        )
-      ) {
-        const expectedDetailTexts =
-          steps
-            .slice(stepOffset + 1)
-            .flatMap(
-              (candidateStep) =>
-                candidateStep.action ===
-                "assertTextVisible"
-                  ? [
-                      candidateStep.text,
-                    ]
-                  : []
-            )
-            .filter(
-              (text) =>
-                !isSanityAssertionText(
-                  text
-                )
-            );
-
-        const rowDetailResult =
-          await openMatchingTableRowDetail(
-            page,
-            step.text,
-            expectedDetailTexts
-          );
-
-        notes.push(
-          rowDetailResult.note
-        );
-
-        console.log(
-          ` Change-request row interaction: ` +
-            rowDetailResult.note
-        );
-
-        if (!rowDetailResult.ok) {
-          notes.push(
-            `manual required: matching ` +
-              `change-request row detail ` +
-              `could not be opened and ` +
-              `verified; remaining ` +
-              `assertions were skipped`
-          );
-
-          return {
-            status:
-              "MANUAL_REQUIRED",
-            reasonCategory:
-              "AUTOMATION_LIMITATION",
-            notes,
-            deterministicEvidence,
-          };
-        }
-
-        await captureCheckpoint?.({
-          stepIndex,
-          step,
-          note:
-            rowDetailResult.note,
-        });
-
-        continue;
-      }
-
-      const clickCaseText = [
-        String(testCase?.goal || ""),
-        String(
-          testCase?.successCriteria || ""
-        ),
-        JSON.stringify(
-          testCase?.steps ?? []
-        ),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .replace(/[-_]+/g, " ");
-
-      const requiresContentScopedClick =
-        clickCaseText.includes(
-          "job wizard"
-        );
-
-      const result =
-        await clickSmartText(
-          page,
-          step.text,
-          {
-            allowGlobalNavigationFallback:
-              !requiresContentScopedClick,
-          }
-        );
-
-      notes.push(result.note);
-
-      console.log(
-        ` Generic browser step ${result.note}`
-      );
-
-      if (!result.ok) {
-        hasActionLimitation = true;
-
-        await tryOpenLikelyFallback(
-          `fallback after clickText "${step.text}"`
-        );
-
-        notes.push(
-          `manual required: prerequisite text action failed; ` +
-            `remaining assertions were skipped`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
-
-      await page.waitForTimeout(1000);
-      continue;
-    }
-
-    if (step.action === "reload") {
-      const beforeUrl = page.url();
-
-      try {
-        await page.reload({
-          waitUntil: "domcontentloaded",
-          timeout: 30000,
-        });
-
-        await page
-          .waitForLoadState(
-            "networkidle",
-            { timeout: 5000 }
-          )
-          .catch(() => undefined);
-
-        await page.waitForTimeout(500);
-      } catch (error: any) {
-        const note =
-          `manual required: page reload could not ` +
-          `be completed safely: ${String(
-            error?.message || error
-          )}`;
-
-        notes.push(note);
-
-        console.log(
-          ` Generic browser step ${note}`
-        );
-
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-          deterministicEvidence,
-        };
-      }
-
-      const note =
-        `reloaded page: ${beforeUrl} -> ` +
-        `${page.url()}`;
-
-      notes.push(note);
-
-      console.log(
-        ` Generic browser step ${note}`
-      );
-
-      await captureCheckpoint?.({
-        stepIndex,
-        step,
-        note,
-      });
-
-      continue;
-    }
-
-    if (
-      step.action === "assertUrlContains" ||
-      step.action === "assertUrlNotContains"
-    ) {
-      hasAssertion = true;
-      hasAcceptanceAssertion = true;
-
-      if (
-        step.action === "assertUrlContains"
-      ) {
-        hasPositiveAcceptanceAssertion =
-          true;
-      }
-
-      const expected =
-        String(step.text || "").trim();
-
-      const actualUrl = page.url();
-
-      let decodedUrl = actualUrl;
-
-      try {
-        decodedUrl =
-          decodeURIComponent(actualUrl);
-      } catch {
-        decodedUrl = actualUrl;
-      }
-
-      const containsExpected =
-        expected.length > 0 &&
-        (
-          actualUrl.includes(expected) ||
-          decodedUrl.includes(expected)
-        );
-
-      const passed =
-        step.action === "assertUrlContains"
-          ? containsExpected
-          : expected.length > 0 &&
-            !containsExpected;
-
-      const assertionLabel =
-        step.action === "assertUrlContains"
-          ? "contains"
-          : "does not contain";
-
-      const note =
-        `assert URL ${assertionLabel} ` +
-        `"${expected}": ` +
-        `${passed ? "PASS" : "FAIL"} ` +
-        `(actual: ${actualUrl})`;
-
-      deterministicEvidence.push({
-        stepIndex,
-        action: step.action,
-        expected,
-        actualUrl,
-        passed,
-        note,
-      });
-
-      notes.push(note);
-
-      console.log(
-        ` Generic browser assertion ${note}`
-      );
-
-      if (!passed) {
-        hasFailedAssertion = true;
-      }
-
-      continue;
-    }
-
-    if (step.action === "assertTextVisible") {
-      hasAssertion = true;
-
-      if (
-        !isSanityAssertionText(
-          step.text
-        )
-      ) {
-        hasAcceptanceAssertion = true;
-        hasPositiveAcceptanceAssertion = true;
-      }
-
-      const actionsMenuResult =
-        await prepareActionsMenuForAssertion(
-          step.text
-        );
-
-      if (actionsMenuResult) {
-        notes.push(
-          actionsMenuResult.note
-        );
-
-        console.log(
-          ` Generic browser step ` +
-            `${actionsMenuResult.note}`
-        );
-
-        if (!actionsMenuResult.ok) {
-          notes.push(
-            "manual required: Actions menu prerequisite " +
-              "could not be verified; assertion was skipped"
-          );
-
-          return {
-            status: "MANUAL_REQUIRED",
-            reasonCategory:
-              "AUTOMATION_LIMITATION",
-            notes,
-          };
-        }
-      }
-
-let visible =
-  await isBrowserTextVisible(
-    page,
-    step.text
-  );
-
-let semanticVisibilitySignal = "";
-
-if (
-  !visible &&
-  isAssessmentLanguageModalCase(
-    testCase
-  ) &&
-  /^select proficiency level$/i.test(
-    String(step.text || "").trim()
-  )
-) {
-  const proficiencyLabelVisible =
-    await isBrowserTextVisible(
-      page,
-      "Proficiency Level"
-    );
-
-  const visibleCefrOptionCount =
-    await page
-      .locator("button:visible")
-      .filter({
-        hasText:
-          /^(A1|A2|B1|B2|C1|C2)$/i,
-      })
-      .count()
-      .catch(() => 0);
-
-  if (
-    proficiencyLabelVisible &&
-    visibleCefrOptionCount >= 6
-  ) {
-    visible = true;
-
-    semanticVisibilitySignal =
-      " (populated proficiency control; " +
-      "visible A1-C2 scale)";
-  }
-}
-
-
-if (
-  !visible &&
-  /^document requirement$/i.test(
-    String(step.text || "").trim()
-  ) &&
-  caseText.includes("work setup") &&
-  /\/company\/(?:all-)?work-setups(?:[/?#]|$)/i.test(
-    page.url()
-  )
-) {
-  const workSetupsTable = page
-    .locator("table:visible")
-    .first();
-
-  const documentHeaderVisible =
-    await workSetupsTable
-      .getByText(/^Document$/i)
-      .first()
-      .isVisible({
-        timeout: 500,
-      })
-      .catch(() => false);
-
-  const requirementValues =
-    workSetupsTable.getByText(
-      /^(Required|Not required)$/i
-    );
-
-  const requirementValueCount =
-    Math.min(
-      await requirementValues
-        .count()
-        .catch(() => 0),
-      20
-    );
-
-  let visibleRequirementValueCount = 0;
-
-  for (
-    let index = 0;
-    index < requirementValueCount;
-    index += 1
-  ) {
-    const valueVisible =
-      await requirementValues
-        .nth(index)
-        .isVisible()
-        .catch(() => false);
-
-    if (valueVisible) {
-      visibleRequirementValueCount += 1;
-    }
-  }
-
-  if (
-    documentHeaderVisible &&
-    visibleRequirementValueCount > 0
-  ) {
-    visible = true;
-
-    semanticVisibilitySignal =
-      " (Document column with visible " +
-      "Required/Not required indicator)";
-  }
-}
-
-let scrollAwareResult:
-        Awaited<
-          ReturnType<
-            typeof findTextInOpenDetailSurface
-          >
-        > | null = null;
-
-      if (!visible) {
-        scrollAwareResult =
-          await findTextInOpenDetailSurface(
-            page,
-            step.text
-          );
-
-        notes.push(
-          scrollAwareResult.note
-        );
-
-        console.log(
-          ` Generic browser step ` +
-            `${scrollAwareResult.note}`
-        );
-
-        if (
-          scrollAwareResult.visible
-        ) {
-          visible = true;
-
-          await captureCheckpoint?.({
-            stepIndex,
-            step,
-            note:
-              scrollAwareResult.note,
-          });
-        }
-      }
-
-      const scrollSignal =
-        scrollAwareResult?.visible
-          ? ` (scroll-aware detail surface)`
-          : "";
-
-      const note = `assert visible "${step.text}": ${
-        visible ? "PASS" : "FAIL"
-}${scrollSignal}${semanticVisibilitySignal}`;
-
-      deterministicEvidence.push({
-        stepIndex,
-        action: "assertTextVisible",
-        expected:
-          `Text is visible: ${step.text}`,
-        passed: visible,
-        note,
-      });
-
-      notes.push(note);
-      console.log(` Generic browser assertion ${note}`);
-
-      if (!visible) {
-        hasFailedAssertion = true;
-      }
-
-      continue;
-    }
-
-    if (step.action === "assertTextNotVisible") {
-      hasAssertion = true;
-
-      if (
-        !isSanityAssertionText(
-          step.text
-        )
-      ) {
-        hasAcceptanceAssertion = true;
-      }
-
-      const actionsMenuResult =
-        await prepareActionsMenuForAssertion(
-          step.text
-        );
-
-      if (actionsMenuResult) {
-        notes.push(
-          actionsMenuResult.note
-        );
-
-        console.log(
-          ` Generic browser step ` +
-            `${actionsMenuResult.note}`
-        );
-
-        if (!actionsMenuResult.ok) {
-          notes.push(
-            "manual required: Actions menu prerequisite " +
-              "could not be verified; assertion was skipped"
-          );
-
-          return {
-            status: "MANUAL_REQUIRED",
-            reasonCategory:
-              "AUTOMATION_LIMITATION",
-            notes,
-          };
-        }
-      }
-
-      const visible =
-        await isBrowserTextVisible(
-          page,
-          step.text
-        );
-
-      const passed = !visible;
-      const note = `assert not visible "${step.text}": ${
-        passed ? "PASS" : "FAIL"
-      }`;
-
-      deterministicEvidence.push({
-        stepIndex,
-        action:
-          "assertTextNotVisible",
-        expected:
-          `Text is not visible: ${step.text}`,
-        passed,
-        note,
-      });
-
-      notes.push(note);
-      console.log(` Generic browser assertion ${note}`);
-
-      if (!passed) {
-        hasFailedAssertion = true;
-      }
-
-      continue;
-    }
-
-    notes.push(`manual required: unsupported browser step "${(step as any).action}"`);
-    needsManualVerification = true;
-  }
-
-  if (
-  needsManualVerification ||
-  (isComplexDropdownCase(testCase) && hasActionLimitation)
-) {
-  return {
-    status: "MANUAL_REQUIRED",
-    reasonCategory: "AUTOMATION_LIMITATION",
-    notes,
-  };
-}
-
-
-  const hasFailedDeterministicUrlAssertion =
-    deterministicEvidence.some(
-      (evidence) => !evidence.passed
-    );
-
-  if (hasFailedAssertion) {
-    if (
-      !hasFailedDeterministicUrlAssertion &&
-      (
-        hasActionLimitation ||
-        requiresPanelOrModal ||
-        isMenuOrFilterCase(testCase)
-      )
-    ) {
-      return {
-        status: "MANUAL_REQUIRED",
-        reasonCategory: "AUTOMATION_LIMITATION",
-        notes: buildManualRequiredNotesForFailedAssertions(notes, testCase),
-      };
-    }
-
-    return {
-      status: "FAIL",
-      reasonCategory:
-        hasFailedDeterministicUrlAssertion
-          ? "DETERMINISTIC_URL_ASSERTION_FAILED"
-          : "PRODUCT_ASSERTION_FAILED",
-      notes,
-      deterministicEvidence,
-    };
-  }
-
-  if (hasAssertion) {
-    if (!hasAcceptanceAssertion) {
-      notes.push(
-        "manual required: only sanity assertions passed; " +
-          "no acceptance-level product behavior was verified"
-      );
-
-      return {
-        status: "MANUAL_REQUIRED",
-        reasonCategory:
-          "SANITY_ONLY_ASSERTIONS",
-        notes,
-      };
-    }
-
-    if (isPermissionSensitiveCase) {
-      notes.push(
-        "manual required: the case depends on a specific " +
-          "permission fixture that the current browser persona " +
-          "does not explicitly verify"
-      );
-
-      return {
-        status: "MANUAL_REQUIRED",
-        reasonCategory:
-          "UNVERIFIED_PERMISSION_FIXTURE",
-        notes,
-      };
-    }
-
-    return {
-      status: "PASS",
-      reasonCategory:
-        deterministicEvidence.length > 0
-          ? "DETERMINISTIC_URL_ASSERTIONS_PASSED"
-          : hasPositiveAcceptanceAssertion
-            ? "ACCEPTANCE_ASSERTIONS_PASSED"
-            : "NEGATIVE_ACCEPTANCE_ASSERTIONS_PASSED",
-      notes,
-      deterministicEvidence,
-    };
-  }
-
-  return {
-    status: "MANUAL_REQUIRED",
-    reasonCategory: "NO_EXPLICIT_ASSERTIONS",
-    notes: [
-      ...notes,
-      "No explicit assertions were executed. Manual verification is required.",
-    ],
-  };
-}
 
 function cleanJsonFileContent(raw: string): string {
   let cleaned = raw.trim();
@@ -4610,86 +458,7 @@ function cleanJsonFileContent(raw: string): string {
   return cleaned;
 }
 
-async function resetBrowserStateOnAppOrigin(page: Page, baseUrl: string) {
-  const loginUrl = `${baseUrl}/account/login`;
-  await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
-  await page
-    .evaluate(async () => {
-      window.localStorage.clear();
-      window.sessionStorage.clear();
-      const dbs = await window.indexedDB.databases();
-      dbs.forEach((db) => {
-        if (db.name) window.indexedDB.deleteDatabase(db.name);
-      });
-    })
-    .catch(() => {});
-  await page.goto(loginUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
 
-  /*
-   * The login application may keep analytics,
-   * Firebase, SSE or other long-lived requests open.
-   * Authentication only requires the app origin and
-   * DOM to be available; networkidle is best-effort.
-   */
-  await page.waitForTimeout(500);
-
-  await page
-    .waitForLoadState(
-      "networkidle",
-      {
-        timeout: 5000,
-      }
-    )
-    .catch(() => {
-      console.log(
-        " Auth reset login page remained network-active; " +
-          "continuing after DOMContentLoaded."
-      );
-    });
-}
-
-async function signInAsPersona(
-  page: Page,
-  baseUrl: string,
-  persona: BrowserPersona
-) {
-  await resetBrowserStateOnAppOrigin(page, baseUrl);
-
-  const customToken = await createCustomToken(persona);
-
-  await page.evaluate(
-    async ({ customToken, apiKey, authDomain, projectId }) => {
-      // @ts-ignore
-      const { initializeApp } = await import(
-        "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js"!
-      );
-
-      // @ts-ignore
-      const { getAuth, signInWithCustomToken } = await import(
-        "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js"!
-      );
-
-      const app = initializeApp({
-        apiKey,
-        authDomain,
-        projectId,
-      });
-
-      await signInWithCustomToken(getAuth(app), customToken);
-    },
-    {
-      customToken,
-      apiKey: process.env.VITE_FIREBASE_API_KEY!,
-      authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN!,
-      projectId: process.env.VITE_FIREBASE_PROJECT_ID!,
-    }
-  );
-
-  await page.waitForTimeout(500);
-}
 
 export async function runBrowserCases(
   options: BrowserRunOptions = {}
@@ -4714,9 +483,106 @@ export async function runBrowserCases(
     process.env.QA_BASE_URL ?? config.environments.staging.url
   ).replace(/\/$/, "");
 
-  const planFile = fs.readFileSync("qa-results/test-plan.json", "utf8");
-  const plan: TestPlan = JSON.parse(cleanJsonFileContent(planFile));
+  const plan: TestPlan = readExecutionTestPlan(
+    options.planPath ? { path: options.planPath } : {}
+  ).plan;
+  const browserExecutionSelection =
+    selectMaterializedBrowserRuntimeCases(plan);
+  const executionBrowserCases =
+    browserExecutionSelection.cases;
+
+  const diagnosticFilter =
+    browserExecutionSelection
+      .diagnosticExecutionFilter;
+
+  console.log(
+    diagnosticFilter.enabled
+      ? " Browser case diagnostic filter: " +
+        `requested=${diagnosticFilter.requestedCaseId}; ` +
+        `matched=${diagnosticFilter.postFilterCount}.`
+      : " Browser case diagnostic filter: disabled."
+  );
+
+  console.log(
+    " Browser runtime admission: " +
+      `materialized=${browserExecutionSelection.materializedBrowserRuntimeUnitCount}, ` +
+      `selected=${browserExecutionSelection.browserExecutionSelectedCount}, ` +
+      `source/proof-rich diagnostic lane=${browserExecutionSelection.sourceProofRichDiagnosticLaneCount}, ` +
+      `discovery/support diagnostic lane=${browserExecutionSelection.discoverySupportDiagnosticLaneCount}.`
+  );
+
+  /*
+   * GROUNDED_SEARCH_FILTER_LEGACY_REQUIREMENT_ADAPTER_V0
+   *
+   * Frozen plans predate structured collection-filter requirements. Upgrade
+   * only source-authorized, fully specified legacy coverage in memory. This
+   * adapter creates requirements, never proof, evidence or a verdict.
+   */
+  for (const browserCase of plan.browserCases ?? []) {
+    const existing = browserCase.acceptanceScope
+      ?.collectionFilterRequirements ?? [];
+    if (existing.length > 0) continue;
+    const requirements = buildCollectionFilterRequirements({
+      testCase: browserCase,
+      ...(plan.acceptanceSourceLedger
+        ? { acceptanceSourceLedger: plan.acceptanceSourceLedger }
+        : {}),
+    });
+    if (requirements.length === 0) continue;
+    browserCase.acceptanceScope = {
+      ...(browserCase.acceptanceScope ?? {
+        requiresBehaviorProof: false,
+        behaviorClaims: [],
+      }),
+      requiresBehaviorProof: true,
+      behaviorClaims: [
+        ...new Set([
+          ...(browserCase.acceptanceScope?.behaviorClaims ?? []),
+          ...requirements.map((requirement) => requirement.sourceClaim),
+        ]),
+      ],
+      collectionFilterRequirements: requirements,
+    };
+  }
   const results: any[] = [];
+  const runProofBindings = (plan.browserCases ?? []).flatMap(
+    (testCase) => testCase.deterministicProofBindings ?? []
+  );
+  const runProofResults: BrowserEvidenceContractProofResult[] = [];
+  const visibleFieldProvenance =
+    discoverFrontendVisibleFieldProvenance();
+
+  console.log(
+    ` Frontend visible-field provenance: ` +
+      `${visibleFieldProvenance.length} bounded ` +
+      `authoritative column declaration(s) discovered.`
+  );
+
+  const genericBrowserUsefulnessCaseRecords:
+    Array<{
+      issueKey: string;
+      caseId: string;
+      events:
+        GenericBrowserUsefulnessEvent[];
+      summary:
+        ReturnType<
+          typeof summarizeGenericBrowserUsefulness
+        >;
+      capabilityRecognitions:
+        BrowserStandardRunCapabilityRecognition[];
+      capabilityTelemetry:
+        ReturnType<
+          typeof summarizeBrowserOperationalCapabilities
+        >;
+      capabilityTelemetryByFamily:
+        Record<
+          string,
+          ReturnType<
+            typeof summarizeBrowserOperationalCapabilities
+          >
+        >;
+    }> = [];
+
 
 const pendingEvidenceReviews: Array<{
   testCase: any;
@@ -4739,88 +605,21 @@ const pendingEvidenceReviews: Array<{
   fs.mkdirSync("qa-results/evidence", { recursive: true });
   fs.mkdirSync("qa-results/videos", { recursive: true });
   if (
-    !Array.isArray(plan.browserCases) ||
-    plan.browserCases.length === 0
+    executionBrowserCases.length === 0
   ) {
     console.log("\nNo browser cases were generated.");
     return results;
   }
 
 
-  const stagehand = new Stagehand({ env: "LOCAL" });
-  await stagehand.init();
-  let wsEndpoint = "";
+  const {
+    stagehand,
+    browser,
+    context,
+    page: initialPage,
+  } = await createBrowserRuntimeSession(baseUrl);
 
-  if (typeof (stagehand as any).connectURL === "function") {
-    wsEndpoint = await (stagehand as any).connectURL();
-  } else {
-    wsEndpoint = (stagehand.context as any).browser().wsEndpoint();
-  }
-
-  const browser = await chromium.connectOverCDP({ wsEndpoint });
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 720 },
-    recordVideo: {
-      dir: "qa-results/videos/",
-      size: { width: 1280, height: 720 },
-    },
-  });
-
-  await context.addInitScript(() => {
-    document.addEventListener("DOMContentLoaded", () => {
-      const cursor = document.createElement("div");
-      cursor.style.width = "20px";
-      cursor.style.height = "20px";
-      cursor.style.borderRadius = "50%";
-      cursor.style.backgroundColor = "rgba(255, 0, 0, 0.5)";
-      cursor.style.position = "fixed";
-      cursor.style.pointerEvents = "none";
-      cursor.style.zIndex = "9999999";
-      cursor.style.transform = "translate(-50%, -50%)";
-      cursor.style.transition = "transform 0.1s ease";
-      document.body.appendChild(cursor);
-
-      const style = document.createElement("style");
-      style.innerHTML = `
-        @keyframes ripple-effect {
-          0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
-          100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
-        }
-        .playwright-ripple {
-          position: fixed;
-          width: 40px;
-          height: 40px;
-          border: 2px solid red;
-          border-radius: 50%;
-          pointer-events: none;
-          z-index: 9999998;
-          animation: ripple-effect 0.6s linear forwards;
-        }
-      `;
-      document.head.appendChild(style);
-
-      window.addEventListener("mousemove", (e) => {
-        cursor.style.left = `${e.clientX}px`;
-        cursor.style.top = `${e.clientY}px`;
-      });
-      window.addEventListener("mousedown", (e) => {
-        cursor.style.transform = "translate(-50%, -50%) scale(0.6)";
-        const ripple = document.createElement("div");
-        ripple.className = "playwright-ripple";
-        ripple.style.left = `${e.clientX}px`;
-        ripple.style.top = `${e.clientY}px`;
-        document.body.appendChild(ripple);
-        setTimeout(() => ripple.remove(), 600);
-      });
-      window.addEventListener("mouseup", () => {
-        cursor.style.transform = "translate(-50%, -50%) scale(1)";
-      });
-    });
-  });
-
-  let page = await context.newPage();
-
-  await page.goto(`${baseUrl}/account/login`, { waitUntil: "domcontentloaded" });
+  let page = initialPage;
 
   let signedInPersona: BrowserPersona | null = null;
 
@@ -4837,8 +636,11 @@ const pendingEvidenceReviews: Array<{
     company_admin: 1,
   };
 
+  const runtimeCases = executionBrowserCases.map(testCase =>
+    testCase.composedRuntimeResolution ? structuredClone(testCase) : testCase);
+  const composedPreparations = new Map<string, BrowserComposedRuntimePreparation>();
   const probeCases = [
-    ...(plan.browserCases as any[]),
+    ...(runtimeCases as any[]),
   ].sort((left, right) => {
     const leftPersona =
       String(left?.persona || "") as BrowserPersona;
@@ -4880,6 +682,24 @@ const pendingEvidenceReviews: Array<{
       continue;
     }
 
+    if (testCase.composedRuntimeResolution) {
+      try {
+        if (signedInPersona !== persona) {
+          await context.clearCookies();
+          await signInAsPersona(page, baseUrl, persona);
+          signedInPersona = persona;
+        }
+        composedPreparations.set(testCase.id, await prepareComposedRuntimeCase({
+          testCase, actualPersona: signedInPersona,
+        }));
+      } catch {
+        composedPreparations.set(testCase.id,
+          blockedComposedPreparation(testCase, "COMPOSED_SESSION_PREPARATION_FAILED"));
+      }
+      // Linked cases never independently invoke legacy navigation/fixture selection.
+      continue;
+    }
+
     const runtimeResourceContext =
       runtimeContexts[persona];
 
@@ -4891,6 +711,54 @@ const pendingEvidenceReviews: Array<{
         ` Browser runtime handoff attached to ` +
           `${testCase.id} (${persona}):`,
         runtimeResourceContext
+      );
+    }
+
+    const skillsRuntimeResult =
+      applyBrowserSkillsRuntime(
+        plan,
+        testCase,
+        runtimeResourceContext
+      );
+
+    if (
+      skillsRuntimeResult.status ===
+      "BLOCKED"
+    ) {
+      testCase.runtimeFixtureResolutionFailure =
+        skillsRuntimeResult.reason;
+    } else if (
+      skillsRuntimeResult.status ===
+      "READY"
+    ) {
+      delete testCase
+        .runtimeFixtureResolutionFailure;
+
+      console.log(
+        " Browser selected-skill runtime handoff " +
+          `prepared ${skillsRuntimeResult.skillLabels.length} ` +
+          "existing record(s)."
+      );
+    }
+
+    const timesheetFixtureResult =
+      await prepareTimesheetContractConfigFixture({
+        testCase,
+        persona,
+        ...(runtimeResourceContext
+          ? { runtimeContext: runtimeResourceContext }
+          : {}),
+      });
+
+    if (
+      timesheetFixtureResult.status !==
+      "NOT_APPLICABLE"
+    ) {
+      console.log(
+        ` Timesheet/contract-config fixture resolver: ` +
+          `status=${timesheetFixtureResult.status}; ` +
+          `reason=${timesheetFixtureResult.reasonCode}; ` +
+          `candidates=${timesheetFixtureResult.candidateCount}.`
       );
     }
 
@@ -5190,7 +1058,7 @@ const candidates =
    * persona group is preserved.
    */
   const executionCases = [
-    ...(plan.browserCases as any[]),
+    ...(runtimeCases as any[]),
   ].sort((left, right) => {
     const leftIsCurrent =
       String(left?.persona || "") ===
@@ -5212,27 +1080,184 @@ const candidates =
 for (const testCase of executionCases) {
   console.log(`\nTaking photo: [${testCase.id}] - ${testCase.goal}`);
 
+  if (testCase.composedRuntimeResolution) {
+    const prepared = composedPreparations.get(testCase.id);
+    if (!composedPreparationAllowsInteraction(testCase, prepared, testCase.persona)) {
+      const censusEvidence = prepared?.candidatePredicateCensus
+        ? `Runtime candidate census: ${JSON.stringify(
+            prepared.candidatePredicateCensus
+          )}`
+        : "";
+      results.push({ id: testCase.id, status: "BLOCKED", reasonCategory: "TEST_DATA_ISSUE",
+        startRoute: "UNKNOWN", successSignalReached: false,
+        evidence: [
+          prepared?.failureReason ?? "COMPOSED_PREPARATION_MISSING",
+          censusEvidence,
+        ].filter(Boolean).join(" | "),
+        composedRuntimePreparation: prepared ?? blockedComposedPreparation(testCase, "COMPOSED_PREPARATION_MISSING") });
+      continue;
+    }
+    testCase.startRoute = prepared!.navigationBinding!.concreteRoute;
+  }
+
+  const fixtureMatchContext = {
+    issueKey: String(
+      plan.issueKey || ""
+    ),
+    testCase,
+  };
+
+  const fixturePreparationPlanned =
+    !testCase.composedRuntimeResolution && shouldPrepareBrowserFixture(
+      fixtureMatchContext
+    );
+
+  const plannedStartRoute =
+    String(
+      testCase.startRoute || ""
+    ).trim();
+
+  const plannedStartRouteReady =
+    plannedStartRoute.startsWith("/") &&
+    !plannedStartRoute.startsWith("//") &&
+    !plannedStartRoute
+      .toUpperCase()
+      .startsWith("UNKNOWN");
+
+  const fixtureEntryRoute =
+    fixturePreparationPlanned &&
+    !plannedStartRouteReady
+      ? resolveBrowserFixtureEntryRoute(
+          fixtureMatchContext
+        )
+      : null;
+
+  if (fixtureEntryRoute) {
+    testCase.startRoute =
+      fixtureEntryRoute;
+
+    console.log(
+      ` Browser fixture entry route selected ` +
+        `for ${testCase.id}: ` +
+        `${fixtureEntryRoute}`
+    );
+  }
+
+  const executionStartRoute =
+    String(
+      testCase.startRoute || ""
+    ).trim();
+
+  const executionRouteReady =
+    executionStartRoute.startsWith("/") &&
+    !executionStartRoute.startsWith("//") &&
+    !executionStartRoute
+      .toUpperCase()
+      .startsWith("UNKNOWN");
+
+    /*
+ * GENERIC_BROWSER_PRE_ADAPTER_CASE_V1
+ *
+ * Preserve the planner-authored case before feature-specific
+ * compatibility adapters add runtime navigation steps.
+ *
+ * The generic browser agent must reason from the acceptance
+ * intent and original planned steps, not from navigation
+ * answers injected later by a feature adapter.
+ */
+const genericBrowserTestCase = {
+  ...testCase,
+  steps: Array.isArray(testCase.steps)
+    ? [...testCase.steps]
+    : testCase.steps,
+};
+
   ensureAssessmentLanguageReadOnlyNavigationStep(
-  testCase
-);
+    testCase
+  );
 
-ensureTalentProfileLanguageNavigationStep(
-  testCase
-);
+  if (!fixturePreparationPlanned) {
+    ensureTalentProfileLanguageNavigationStep(
+      testCase
+    );
+  } else {
+    console.log(
+      ` Browser fixture provider owns ` +
+        `the talent-language surface ` +
+        `preparation for ${testCase.id}.`
+    );
+  }
 
-ensureAssessmentLanguageEditorNavigationStep(
-  testCase
-);
+  ensureAssessmentLanguageEditorNavigationStep(
+    testCase
+  );
 
-ensureJobWizardEmptyStateControlStep(
-  testCase
-);
+  ensureJobWizardEmptyStateControlStep(
+    testCase
+  );
 
   const successSignal =
     buildSuccessSignal(testCase);
-    const blockReason = getBrowserBlockReason(testCase);
 
-    if (blockReason) {
+  const blockReason =
+    getBrowserBlockReason(testCase);
+
+  const fixtureBlockDeferred =
+    Boolean(blockReason) &&
+    fixturePreparationPlanned &&
+    executionRouteReady;
+
+  if (
+    !blockReason &&
+    !executionRouteReady
+  ) {
+    const routeReason =
+      "No concrete browser route or registered " +
+      "fixture-provider entry route was available.";
+
+    results.push({
+      id: testCase.id,
+      status: "BLOCKED",
+      reasonCategory:
+        "MISSING_BROWSER_ROUTE",
+      startRoute: testCase.startRoute,
+      evidence: [
+        routeReason,
+        `Success signal: ${successSignal}`,
+        "Success signal reached: false",
+      ].join(" | "),
+      successSignal,
+      successSignalReached: false,
+      evidenceSummary: {
+        successSignal,
+        successSignalReached: false,
+        authWallDetected: false,
+        pagesVisited: [],
+        keyVisibleTexts: [],
+      },
+      trace: [
+        {
+          index: 1,
+          action:
+            "fixture-entry-route",
+          status: "BLOCKED",
+          note: routeReason,
+        },
+      ],
+    });
+
+    console.log(
+      ` Result: BLOCKED (` +
+        `${routeReason})`
+    );
+
+    continue;
+  }
+
+    if (
+      blockReason &&
+      !fixtureBlockDeferred
+    ) {
       results.push({
         id: testCase.id,
         status: "BLOCKED",
@@ -5267,6 +1292,17 @@ ensureJobWizardEmptyStateControlStep(
       continue;
     }
 
+    if (
+      blockReason &&
+      fixtureBlockDeferred
+    ) {
+      console.log(
+        ` Browser fixture lifecycle deferred ` +
+          `the early fixture block for ` +
+          `${testCase.id}.`
+      );
+    }
+
 const deferredCleanups:
   DeferredCleanup[] = [];
 
@@ -5295,8 +1331,16 @@ if (signedInPersona !== persona) {
   console.log(` Reusing browser session for persona: ${persona}`);
 }
 
+      if (testCase.composedRuntimeResolution && !composedPreparationAllowsInteraction(
+        testCase, composedPreparations.get(testCase.id), signedInPersona
+      )) {
+        results.push({ id: testCase.id, status: "BLOCKED", reasonCategory: "TEST_DATA_ISSUE",
+          successSignalReached: false, evidence: "COMPOSED_PREPARATION_SESSION_MISMATCH" });
+        continue;
+      }
+
       const targetUrl =
-        `${baseUrl}${testCase.startRoute}`;
+        `${baseUrl}${executionStartRoute}`;
 
       let authenticatedRouteReached =
         false;
@@ -5377,15 +1421,772 @@ if (signedInPersona !== persona) {
         );
       }
 
-      await logVisibleAssessmentControls(
+      const executionSurfaceContract =
+        testCase.executionSurfacePrerequisiteContract;
+      if (executionSurfaceContract) {
+        const surfacePreparation =
+          resolveBrowserExecutionSurfacePrerequisite({
+            contract: executionSurfaceContract,
+            observation: await observeBrowserPage(page),
+            actualPersona: persona,
+          });
+        if (surfacePreparation.status === "BLOCKED") {
+          results.push({
+            id: testCase.id,
+            status: "BLOCKED",
+            reasonCategory: "AUTOMATION_LIMITATION",
+            startRoute: testCase.startRoute,
+            successSignalReached: false,
+            evidence:
+              `Execution surface prerequisite blocked: ` +
+              `${surfacePreparation.reason}; ` +
+              `candidates=${surfacePreparation.candidateCount}.`,
+            executionSurfacePreparation: surfacePreparation,
+          });
+          continue;
+        }
+        console.log(
+          ` Browser execution surface prepared for ${testCase.id}: ` +
+            `${surfacePreparation.binding.kind} ` +
+            `${surfacePreparation.binding.role}.`
+        );
+      }
+
+      const preGenericFixtureDispatch =
+        await dispatchBrowserRuntimeFixtureResolution({
+          page,
+          testCase,
+          actualPersona: persona,
+        });
+
+      if (preGenericFixtureDispatch.status === "BLOCKED") {
+        results.push({
+          id: testCase.id,
+          status: "BLOCKED",
+          reasonCategory: "TEST_DATA_ISSUE",
+          startRoute: testCase.startRoute,
+          successSignalReached: false,
+          evidence: preGenericFixtureDispatch.note,
+          runtimeFixturePreparations:
+            preGenericFixtureDispatch.preparations,
+        });
+        continue;
+      }
+
+/*
+ * GENERIC_BROWSER_BOUNDED_NAVIGATION_V1
+ *
+ * The generic browser agent is intentionally allowed to make
+ * more than one safe read-only decision.
+ *
+ * Each successful state-changing action is followed by a fresh
+ * observation and a new proposal. The loop is bounded so an LLM
+ * cannot wander indefinitely.
+ *
+ * Feature-specific navigation remains only as a compatibility
+ * fallback after this loop.
+ */
+/*
+ * GENERIC_BROWSER_VERIFIED_EXECUTION_BUDGET_V1
+ *
+ * Keep the conservative six-action base fuse.
+ *
+ * One bounded extension is earned only after six actions have
+ * already satisfied the runner's existing verified execution
+ * contract: EXECUTED + executed=true + stateChanged=true.
+ *
+ * Failed, unchanged, unsafe or repeated actions still terminate
+ * before additional budget can be earned.
+ */
+const caseRuntimeAudit =
+  beginBrowserCaseRuntimeAudit({
+    caseId: String(testCase.id || ""),
+    page,
+    productOrigin: baseUrl,
+  });
+
+/* The typed fixture-resolution dispatch completed for this case. */
+if (
+  preGenericFixtureDispatch.status === "NOT_REQUIRED" ||
+  preGenericFixtureDispatch.status === "READY"
+) {
+  caseRuntimeAudit.recordTestData("CLEAR");
+}
+
+const genericBrowserAttempt =
+  await runGenericBrowserRuntimeAttempt({
+    page,
+    issueKey: String(plan.issueKey || ""),
+    testCase: genericBrowserTestCase,
+    policy: {
+      allowActionExecution: true,
+    },
+    recordSafetyEvaluation:
+      (evaluation) =>
+        caseRuntimeAudit.recordSafetyEvaluation(
+          evaluation
+        ),
+  });
+
+const genericBrowserExecutedSteps =
+  genericBrowserAttempt.verifiedStateChangingActionCount;
+
+const genericBrowserStopReason =
+  genericBrowserAttempt.stopReason;
+
+const genericBrowserUsefulnessEvents =
+  genericBrowserAttempt.events;
+
+const genericBrowserCapabilityRecognitions =
+  genericBrowserAttempt.capabilityRecognitions;
+
+const genericBrowserGoalIteration =
+  genericBrowserAttempt.goalIteration;
+
+const genericBrowserGoalObservation =
+  genericBrowserAttempt.goalObservation;
+
+const genericBrowserBudgetExhausted =
+  genericBrowserAttempt.budgetExhausted;
+
+/*
+ * GENERIC_BROWSER_PROOF_GATED_OWNERSHIP_V1
+ *
+ * Autonomous navigation is an additive migration path.
+ *
+ * GOAL_ALREADY_SATISFIED is only permission to attempt
+ * canonical deterministic verification. It is not proof
+ * and does not by itself grant ownership of the current
+ * browser state.
+ *
+ * Partial navigation is disposable immediately. A terminal
+ * autonomous state is also disposable if its canonical
+ * deterministic handoff does not PASS.
+ *
+ * Compatibility execution always resumes from a fresh
+ * authenticated page rather than replaying against a
+ * partially changed autonomous state.
+ */
+const genericBrowserReachedGoal =
+  genericBrowserStopReason ===
+  "GOAL_ALREADY_SATISFIED";
+
+const genericBrowserHandoffAcceptedRoutePath =
+  browserSourceBoundAssertionPathOf(page.url());
+const genericBrowserHandoffSourceRequirements =
+  genericBrowserReachedGoal
+    ? buildBrowserSourceBoundAssertionSetRequirements({
+        testCase,
+        assertionSourceCase: genericBrowserTestCase,
+        obligationLedger: plan.acceptanceObligationLedger,
+        sourceLedger: plan.acceptanceSourceLedger,
+        acceptedRoutePath: genericBrowserHandoffAcceptedRoutePath,
+      })
+    : [];
+
+const genericBrowserAssertionHandoffCase =
+  genericBrowserReachedGoal
+    ? buildGenericBrowserAssertionHandoffCase(
+        genericBrowserTestCase,
+        genericBrowserGoalObservation,
+        genericBrowserHandoffSourceRequirements
+      )
+    : null;
+
+const genericBrowserHasAssertionHandoff =
+  genericBrowserAssertionHandoffCase !== null;
+
+if (
+  genericBrowserGoalIteration !==
+  null
+) {
+  genericBrowserUsefulnessEvents.push({
+    kind:
+      "HANDOFF_ELIGIBILITY_RECORDED",
+    iteration:
+      genericBrowserGoalIteration,
+    eligible:
+      genericBrowserHasAssertionHandoff,
+  });
+}
+
+/*
+ * DISCOVERY_ONLY_ASSERTION_PROBE_V1
+ *
+ * Discovery-only execution may run the existing canonical deterministic
+ * assertion handoff after GOAL_ALREADY_SATISFIED so runtime usefulness can be
+ * measured beyond navigation.
+ *
+ * The assertion handoff remains authority-neutral until the shared
+ * deterministic PASS policy independently revalidates its typed proof:
+ * - no fixture authority is created;
+ * - no planner authority is created;
+ * - source-bound proof, discharge, readiness, and runtime context must all
+ *   be complete before the common deterministic PASS attempt can promote it.
+ *
+ * This probes whether the reached runtime state is deterministically
+ * verifiable without promoting discovery observations into proof authority.
+ */
+if (testCase.executionPolicy?.lane === "DISCOVERY_ONLY") {
+  let discoveryAssertionHandoffStatus:
+    string | null = null;
+  let discoveryAssertionHandoffResult:
+    BrowserStepResult | null = null;
+
+  if (genericBrowserAssertionHandoffCase) {
+    const handoffResult =
+      await runGenericBrowserSteps(
         page,
-        testCase
+        genericBrowserAssertionHandoffCase,
+        undefined,
+        undefined,
+        {
+          visibleFieldProvenance,
+          executionPersona: persona,
+        }
       );
 
-      await prepareAssessmentLanguageModal(
-  page,
-  testCase
-);
+    discoveryAssertionHandoffResult = handoffResult;
+    discoveryAssertionHandoffStatus =
+      handoffResult.status;
+
+    if (
+      genericBrowserGoalIteration !==
+      null
+    ) {
+      genericBrowserUsefulnessEvents.push({
+        kind:
+          "HANDOFF_RESULT_RECORDED",
+        iteration:
+          genericBrowserGoalIteration,
+        attempted: true,
+        passed:
+          handoffResult.status ===
+          "PASS",
+      });
+    }
+
+    console.log(
+      ` Discovery-only deterministic assertion probe for ` +
+        `${testCase.id}: ${handoffResult.status}.`
+    );
+  }
+
+  const genericBrowserUsefulnessSummary =
+    summarizeGenericBrowserUsefulness(
+      genericBrowserUsefulnessEvents
+    );
+
+  const capabilityEvaluations =
+    genericBrowserCapabilityRecognitions.map(
+      (recognition) =>
+        recognition.evaluation
+    );
+
+  const genericBrowserCapabilityTelemetry =
+    summarizeBrowserOperationalCapabilities(
+      capabilityEvaluations
+    );
+
+  const discoveryAcceptedRoutePath =
+    browserSourceBoundAssertionPathOf(page.url());
+  const discoveryButtonCarrierObservation =
+    discoveryAssertionHandoffResult
+      ? observeBrowserPage(page)
+      : null;
+  const discoveryButtonCarrierObservations =
+    discoveryButtonCarrierObservation && discoveryAssertionHandoffResult
+      ? observeBrowserSourceDerivedButtonCarriers({
+          requirements: buildBrowserSourceBoundAssertionSetRequirements({
+            testCase,
+            assertionSourceCase: genericBrowserAssertionHandoffCase,
+            obligationLedger: plan.acceptanceObligationLedger,
+            sourceLedger: plan.acceptanceSourceLedger,
+            acceptedRoutePath: discoveryAcceptedRoutePath,
+          }),
+          observation: await discoveryButtonCarrierObservation,
+          targetContextGrounded:
+            genericBrowserReachedGoal &&
+            discoveryAssertionHandoffResult.status === "PASS",
+        })
+      : [];
+  const discoverySourceBoundTelemetry =
+    discoveryAssertionHandoffResult
+      ? collectBrowserSourceBoundAssertionSetTelemetry({
+          testCase,
+          assertionSourceCase:
+            genericBrowserAssertionHandoffCase,
+          allCases: executionCases,
+          obligationLedger:
+            plan.acceptanceObligationLedger,
+          sourceLedger:
+            plan.acceptanceSourceLedger,
+          browserObligationBindings:
+            plan.browserObligationBindings,
+          acceptedRoutePath:
+            discoveryAcceptedRoutePath,
+          deterministicEvidence:
+            discoveryAssertionHandoffResult
+              .deterministicEvidence ?? [],
+          actualPersona: persona,
+          freshObservation:
+            genericBrowserReachedGoal &&
+            discoveryAssertionHandoffResult.status ===
+              "PASS",
+          buttonCarrierObservations:
+            discoveryButtonCarrierObservations,
+        })
+      : null;
+
+  const discoveryStructuralControlPresenceRequirements =
+    genericBrowserReachedGoal
+      ? buildBrowserSourceBoundStructuralControlPresenceRequirements({
+          testCase,
+          executionObligationIds:
+            testCase.executionIntentAuthority?.executionObligationIds ??
+            testCase.executionVerdictScope?.executionObligationIds ??
+            [],
+          obligationLedger: plan.acceptanceObligationLedger,
+          sourceLedger: plan.acceptanceSourceLedger,
+          acceptedRoutePath: discoveryAcceptedRoutePath,
+        })
+      : [];
+  const discoveryStructuralControlPresenceObservation =
+    discoveryStructuralControlPresenceRequirements.length > 0
+      ? await observeBrowserPage(page)
+      : null;
+  const discoveryStructuralControlPresenceEvidence =
+    discoveryStructuralControlPresenceObservation
+      ? discoveryStructuralControlPresenceRequirements.map((requirement) =>
+          evaluateBrowserSourceBoundStructuralControlPresence({
+            requirement,
+            observation: discoveryStructuralControlPresenceObservation,
+            actualPersona: persona,
+            actualRoutePath: discoveryAcceptedRoutePath,
+            freshObservation: true,
+          })
+        )
+      : [];
+
+  if (discoverySourceBoundTelemetry) {
+    console.log(
+      `${SOURCE_BOUND_ASSERTION_SET_DISCOVERY_TELEMETRY_MARKER} ` +
+      JSON.stringify(
+        summarizeBrowserSourceBoundAssertionSetDiscoveryTelemetry({
+          caseId: testCase.id,
+          persona,
+          acceptedRoutePath: discoveryAcceptedRoutePath,
+          telemetry: discoverySourceBoundTelemetry,
+        })
+      )
+    );
+  }
+
+  genericBrowserUsefulnessCaseRecords.push({
+    issueKey:
+      String(plan.issueKey || ""),
+    caseId:
+      String(testCase.id || ""),
+    events:
+      [...genericBrowserUsefulnessEvents],
+    summary:
+      genericBrowserUsefulnessSummary,
+    capabilityRecognitions:
+      [...genericBrowserCapabilityRecognitions],
+    capabilityTelemetry:
+      genericBrowserCapabilityTelemetry,
+    capabilityTelemetryByFamily: {},
+  });
+
+  caseRuntimeAudit.completeSafetyAccounting();
+  const discoveryFinalizedRuntimeAudit = caseRuntimeAudit.finish();
+  const discoveryRuntimeAuditSignals =
+    deriveBrowserCaseRuntimeSafetySignals(
+      discoveryFinalizedRuntimeAudit
+    );
+  console.log(
+    "BROWSER_DETERMINISTIC_PASS_RUNTIME_AUDIT_V1 " +
+      JSON.stringify({
+        caseId: testCase.id,
+        safetyViolation: discoveryRuntimeAuditSignals.safetyViolation,
+        productNonGetCount: discoveryRuntimeAuditSignals.productNonGetCount,
+        persistenceViolation: discoveryRuntimeAuditSignals.persistenceViolation,
+        testDataIssue: discoveryRuntimeAuditSignals.testDataIssue,
+      })
+  );
+
+  const discoveryPassProofs = discoverySourceBoundTelemetry
+    ? discoverySourceBoundTelemetry.requirements.flatMap((requirement, index) => {
+        const allocation = discoverySourceBoundTelemetry.allocations.find((candidate) => candidate.obligationId === requirement.obligationId);
+        return allocation ? [{ kind: "SOURCE_BOUND_ASSERTION_SET" as const, requirement, evidence: discoverySourceBoundTelemetry.evidence[index]!, allocation }] : [];
+      })
+      : [];
+  const discoveryStructuralPassProofs =
+    discoveryStructuralControlPresenceRequirements.flatMap((requirement, index) =>
+      discoveryStructuralControlPresenceEvidence[index]
+        ? [{
+            kind: "SOURCE_BOUND_STRUCTURAL_CONTROL_PRESENCE" as const,
+            requirement,
+            evidence: discoveryStructuralControlPresenceEvidence[index]!,
+          }]
+        : []
+    );
+  const discoveryRoute = discoveryAcceptedRoutePath;
+  /*
+   * SOURCE_AUTHORIZED_DISCOVERY_FIXTURE_REQUIREMENT_V1
+   *
+   * Planner fixture prose is operational guidance, not fixture authority.
+   * Only immutable source-authorized fixture references may make a discovery
+   * execution fixture-required for canonical case verdict purposes.
+   */
+  const discoveryFixtureStatus = normalizeBrowserDeterministicPassFixtureStatus({
+    path: "DISCOVERY_BYPASS",
+    fixtureRequired: testCase.executionIntentAuthority
+      ? testCase.executionIntentAuthority.fixtureRequirementRefs.length > 0
+      : null,
+  });
+  const discoveryBindingExecutionId = `browser-runtime:${testCase.id}`;
+  const discoveryBindingStateIdentity = [
+    testCase.id,
+    genericBrowserGoalIteration ?? "none",
+    discoveryRoute,
+  ].join("\u0000");
+  const discoveryBindingAttempt = testCase.executionIntentAuthority &&
+      genericBrowserGoalObservation
+    ? createValidatedBrowserRuntimeExecutionBinding({
+        intent: testCase.executionIntentAuthority,
+        actualPersona: persona,
+        resolvedRoute: discoveryRoute ?? "UNKNOWN",
+        observation: genericBrowserGoalObservation,
+        matchedTarget: genericBrowserAttempt.goalMatchedTarget,
+        executionId: discoveryBindingExecutionId,
+        stateIdentity: discoveryBindingStateIdentity,
+        observedMutationClass: genericBrowserExecutedSteps === 0
+          ? "READ_ONLY"
+          : "TRANSIENT_REVERSIBLE",
+        observationId: `${discoveryBindingExecutionId}:goal:${genericBrowserGoalIteration ?? "none"}`,
+      })
+    : null;
+  const discoveryProofSignals = deriveBrowserDeterministicProofRuntimeSignals({
+    testCase,
+    ...(plan.acceptanceObligationLedger ? { obligationLedger: plan.acceptanceObligationLedger } : {}),
+    ...(plan.browserObligationBindings ? { browserObligationBindings: plan.browserObligationBindings } : {}),
+    localStateProofs: [],
+    sourceBoundAssertionSetProofs: discoveryPassProofs,
+    structuralControlPresenceProofs: discoveryStructuralPassProofs,
+    deterministicObligationDischarges: discoverySourceBoundTelemetry?.discharges ?? [],
+    ...(discoverySourceBoundTelemetry ? { caseProofReadiness: discoverySourceBoundTelemetry.caseProofReadiness } : {}),
+    acceptedRoutePath: discoveryRoute,
+    actualPersona: persona,
+  });
+  const discoveryDeterministicPassRuntimeContext = buildBrowserDeterministicPassRuntimeContext({
+    fixtureStatus: discoveryFixtureStatus,
+    ...(discoveryRoute ? { acceptedRoutePath: { status: "AVAILABLE" as const, value: discoveryRoute, source: "Final accepted discovery route." } } : {}),
+    ...discoveryProofSignals,
+    ...discoveryRuntimeAuditSignals,
+  });
+  const discoveryResult: BrowserStepResult = {
+    status: "MANUAL_REQUIRED",
+    reasonCategory: "AUTOMATION_LIMITATION",
+    notes: [],
+    deterministicPassRuntimeContext: discoveryDeterministicPassRuntimeContext,
+    ...(discoveryBindingAttempt?.status === "VALID"
+      ? { runtimeExecutionBinding: discoveryBindingAttempt.binding }
+      : discoveryBindingAttempt
+        ? { runtimeExecutionBindingRejectionReason: discoveryBindingAttempt.reason }
+        : {}),
+    sourceBoundAssertionSetPassProofs: discoveryPassProofs,
+    structuralControlPresenceRequirements:
+      discoveryStructuralControlPresenceRequirements,
+    structuralControlPresenceEvidence:
+      discoveryStructuralControlPresenceEvidence,
+    deterministicObligationDischarges:
+      discoverySourceBoundTelemetry?.discharges ?? [],
+    ...(
+      discoverySourceBoundTelemetry
+        ? { caseProofReadiness: discoverySourceBoundTelemetry.caseProofReadiness }
+        : {}
+    ),
+  };
+  const discoveryVerdictContract =
+    materializeBrowserRuntimeExecutionContract({
+      testCase,
+      executionCheckContract:
+        testCase.executionCheckContract,
+      acceptedRoutePath: discoveryRoute,
+      sourceBoundAssertionSetRequirements:
+        discoverySourceBoundTelemetry
+          ?.requirements ?? [],
+      structuralControlPresenceRequirements:
+        discoveryStructuralControlPresenceRequirements,
+    });
+
+  if (isOperationalDiscoverySupportUnit(testCase)) {
+    discoveryResult.operationalExecution = { kind: "DISCOVERY_ONLY_SUPPORT" };
+    discoveryResult.reasonCategory = "OPERATIONAL_DISCOVERY_SUPPORT";
+  } else {
+    const discoveryCaseVerdict = deriveBrowserCaseVerdict({
+    testCase:
+      discoveryVerdictContract.testCase,
+    ...(
+      discoveryVerdictContract
+        .executionCheckContract
+        ? {
+            executionCheckContract:
+              discoveryVerdictContract
+                .executionCheckContract,
+          }
+        : {}
+    ),
+    executionAuthority: {
+      actualPersona: {
+        status: "AVAILABLE",
+        value: persona,
+        source: "Final authenticated discovery persona.",
+      },
+      ...(discoveryRoute
+        ? {
+            acceptedRoutePath: {
+              status: "AVAILABLE" as const,
+              value: discoveryRoute,
+              source: "Final accepted discovery route.",
+            },
+          }
+        : {
+            acceptedRoutePath: {
+              status: "UNAVAILABLE" as const,
+              reason: "No accepted discovery route was finalized.",
+            },
+          }),
+      targetVerified: discoveryProofSignals.targetVerified,
+      fixtureStatus: discoveryFixtureStatus,
+    },
+    runtimeAudit: discoveryFinalizedRuntimeAudit,
+    runnerStatus: discoveryResult.status,
+    sourceBoundAssertionSetRequirements:
+      discoverySourceBoundTelemetry?.requirements ?? [],
+    sourceBoundAssertionSetEvidence:
+      discoverySourceBoundTelemetry?.evidence ?? [],
+    structuralControlPresenceRequirements:
+      discoveryStructuralControlPresenceRequirements,
+    structuralControlPresenceEvidence:
+      discoveryStructuralControlPresenceEvidence,
+    deterministicEvidence:
+      discoveryAssertionHandoffResult?.deterministicEvidence ?? [],
+  });
+    applyBrowserCaseVerdict(discoveryResult, discoveryCaseVerdict);
+    attemptDeterministicBrowserPass({
+    testCase,
+    obligationLedger: plan.acceptanceObligationLedger,
+    browserObligationBindings: plan.browserObligationBindings,
+    currentResult: discoveryResult,
+    localStatePassProofs: [],
+    sourceBoundAssertionSetPassProofs: discoveryPassProofs,
+    deterministicPassRuntimeContext: discoveryDeterministicPassRuntimeContext,
+    });
+  }
+
+  results.push({
+    id:
+      testCase.id,
+    status:
+      discoveryResult.status,
+    reasonCategory:
+      discoveryResult.reasonCategory,
+    startRoute:
+      testCase.startRoute,
+    successSignalReached:
+      discoveryResult.status === "PASS",
+    deterministicPassRuntimeContext: discoveryDeterministicPassRuntimeContext,
+    caseVerdict: discoveryResult.caseVerdict,
+    structuralControlPresenceRequirements:
+      discoveryStructuralControlPresenceRequirements,
+    structuralControlPresenceEvidence:
+      discoveryStructuralControlPresenceEvidence,
+    ...(discoveryResult.operationalExecution
+      ? { operationalExecution: discoveryResult.operationalExecution }
+      : {}),
+    ...(discoveryResult.runtimeExecutionBinding
+      ? { runtimeExecutionBinding: discoveryResult.runtimeExecutionBinding }
+      : {}),
+    ...(discoveryResult.runtimeExecutionBindingRejectionReason
+      ? { runtimeExecutionBindingRejectionReason: discoveryResult.runtimeExecutionBindingRejectionReason }
+      : {}),
+    evidence: [
+      "DISCOVERY_ONLY execution completed; deterministic PASS is evaluated only from typed proof authority.",
+      `Generic navigation stop: ${
+        genericBrowserStopReason ||
+        "NO_SAFE_ACTION"
+      }`,
+      genericBrowserAssertionHandoffCase
+        ? `Canonical deterministic assertion probe: ${
+            discoveryAssertionHandoffStatus ||
+            "UNKNOWN"
+          }`
+        : "Canonical deterministic assertion probe: unavailable.",
+    ].join(" | "),
+    sourceBoundAssertionSetRequirements:
+      discoverySourceBoundTelemetry?.requirements ?? [],
+    sourceBoundAssertionSetEvidence:
+      discoverySourceBoundTelemetry?.evidence ?? [],
+    runtimeSourceAssertionAllocations:
+      discoverySourceBoundTelemetry?.allocations ?? [],
+    sourceBoundAssertionSetPassProofs: discoveryPassProofs,
+    deterministicObligationDischarges:
+      discoverySourceBoundTelemetry?.discharges ?? [],
+    ...(
+      discoverySourceBoundTelemetry
+        ? {
+            caseProofReadiness:
+              discoverySourceBoundTelemetry
+                .caseProofReadiness,
+          }
+        : {}
+    ),
+    ...(
+      discoveryResult.deterministicPassEligibility
+        ? { deterministicPassEligibility: discoveryResult.deterministicPassEligibility }
+        : {}
+    ),
+    ...(
+      discoveryResult.deterministicPassValidationContext
+        ? { deterministicPassValidationContext: discoveryResult.deterministicPassValidationContext }
+        : {}
+    ),
+  });
+
+  console.log(
+    ` Discovery-only execution finalized deterministic verdict evaluation for ${testCase.id}.`
+  );
+
+  continue;
+}
+
+const restoreFreshCompatibilityPage =
+  async (
+    reason: string
+  ): Promise<void> => {
+    const discardedPage = page;
+    const discardedVideo =
+      discardedPage.video();
+
+    await discardedPage
+      .close()
+      .catch(() => {});
+
+    const discardedVideoPath =
+      discardedVideo
+        ? await discardedVideo
+            .path()
+            .catch(() => null)
+        : null;
+
+    if (
+      discardedVideoPath &&
+      fs.existsSync(discardedVideoPath)
+    ) {
+      fs.rmSync(
+        discardedVideoPath,
+        { force: true }
+      );
+    }
+
+    /*
+     * Browser storage and transient page state from the
+     * speculative attempt must not leak into compatibility
+     * execution.
+     */
+    await context.clearCookies();
+
+    page = await context.newPage();
+
+    await page.setViewportSize({
+      width: 1280,
+      height: 720,
+    });
+
+    await signInAsPersona(
+      page,
+      baseUrl,
+      persona
+    );
+
+    signedInPersona = persona;
+
+    await page.goto(
+      targetUrl,
+      {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      }
+    );
+
+    await page.waitForTimeout(1000);
+
+    await page
+      .waitForLoadState(
+        "networkidle",
+        { timeout: 5000 }
+      )
+      .catch(() => {});
+
+    if (await detectAuthWall(page)) {
+      throw new Error(
+        `Compatibility fallback could not restore ` +
+          `an authenticated fresh browser state for ` +
+          `${testCase.id}.`
+      );
+    }
+
+    console.log(
+      ` Generic browser attempt discarded: ` +
+        `${reason}; compatibility execution restored ` +
+        `from a fresh authenticated page at ` +
+        `${page.url()}.`
+    );
+  };
+
+const genericBrowserNeedsFreshCompatibilityFallback =
+  genericBrowserExecutedSteps > 0 &&
+  !genericBrowserHasAssertionHandoff;
+
+if (genericBrowserHasAssertionHandoff) {
+  console.log(
+    ` Generic browser navigation reached the ` +
+      `deterministic handoff candidate after ` +
+      `${genericBrowserExecutedSteps} verified ` +
+      `state-changing action(s); compatibility ` +
+      `fallback remains available until canonical ` +
+      `deterministic verification passes.`
+  );
+} else {
+  if (
+    genericBrowserNeedsFreshCompatibilityFallback
+  ) {
+    await restoreFreshCompatibilityPage(
+      genericBrowserStopReason ||
+        "autonomous navigation stopped before deterministic handoff"
+    );
+  }
+
+  await logVisibleAssessmentControls(
+    page,
+    testCase
+  );
+
+  await prepareAssessmentLanguageModal(
+    page,
+    testCase
+  );
+}
+
+/*
+ * This flag now means only that the deterministic handoff
+ * gets first attempt. A non-PASS handoff falls through to
+ * fresh compatibility execution below.
+ */
+const genericBrowserLegacyReplaySuppressed =
+  genericBrowserHasAssertionHandoff;
 
       const pagesVisited = new Set<string>();
     pagesVisited.add(page.url());
@@ -5465,8 +2266,462 @@ if (signedInPersona !== persona) {
         { recursive: true }
       );
 
-      const stepResult =
-        await runGenericBrowserSteps(
+      let fixtureCheckpointCounter = 0;
+
+      const fixturePreparation: BrowserFixturePreparationResult =
+        testCase.composedRuntimeResolution
+        ? { status: "NOT_APPLICABLE", providerId: null, notes: [],
+            deterministicEvidence: [], cleanups: [] }
+        : await prepareBrowserFixture({
+          issueKey: String(
+            plan.issueKey || ""
+          ),
+          page,
+          testCase,
+          persona,
+          baseUrl,
+          ...(
+            testCase
+              .runtimeResourceContext
+              ? {
+                  runtimeResourceContext:
+                    testCase
+                      .runtimeResourceContext,
+                }
+              : {}
+          ),
+          registerCleanup: (
+            cleanup
+          ) => {
+            if (
+              !deferredCleanups.includes(
+                cleanup
+              )
+            ) {
+              deferredCleanups.push(
+                cleanup
+              );
+            }
+          },
+          captureCheckpoint: async ({
+            phase,
+            label,
+            note,
+            fullPage = false,
+          }) => {
+            fixtureCheckpointCounter += 1;
+
+            const safeLabel = label
+              .trim()
+              .toLowerCase()
+              .replace(
+                /[^a-z0-9]+/g,
+                "-"
+              )
+              .replace(
+                /^-+|-+$/g,
+                ""
+              )
+              .slice(0, 48);
+
+            const checkpointPath =
+              `${checkpointDirectory}/` +
+              `${String(
+                fixtureCheckpointCounter
+              ).padStart(2, "0")}-` +
+              `fixture-${phase}-` +
+              `${safeLabel || "checkpoint"}.png`;
+
+            await page.screenshot({
+              path: checkpointPath,
+              fullPage,
+            });
+
+            checkpointEvidence.push({
+              stepIndex: 0,
+              action:
+                `fixture-${phase}`,
+              label:
+                `fixture ${phase} ${label}`,
+              note,
+              screenshotPath:
+                checkpointPath,
+              url: page.url(),
+            });
+
+            console.log(
+              ` Browser fixture checkpoint ` +
+                `captured: phase=${phase}, ` +
+                `label=${label}, ` +
+                `path=${checkpointPath}`
+            );
+          },
+        });
+
+      for (
+        const cleanup of
+        fixturePreparation.cleanups
+      ) {
+        if (
+          !deferredCleanups.includes(
+            cleanup
+          )
+        ) {
+          deferredCleanups.push(
+            cleanup
+          );
+        }
+      }
+
+      let stepResult:
+        BrowserStepResult | null = null;
+
+      if (
+        fixturePreparation.status ===
+          "BLOCKED" ||
+        fixturePreparation.status ===
+          "ERROR"
+      ) {
+        stepResult = {
+          status:
+            fixturePreparation.status,
+          reasonCategory:
+            fixturePreparation
+              .reasonCategory,
+          notes: [
+            `Browser fixture provider ` +
+              `"${fixturePreparation.providerId}" ` +
+              `returned ` +
+              `${fixturePreparation.status}.`,
+            ...fixturePreparation.notes,
+          ],
+          deterministicEvidence: [
+            ...fixturePreparation
+              .deterministicEvidence,
+          ],
+        };
+      } else if (
+        blockReason &&
+        fixturePreparation.status ===
+          "NOT_APPLICABLE"
+      ) {
+        stepResult = {
+          status: "BLOCKED",
+          reasonCategory:
+            getBrowserBlockReasonCategory(
+              blockReason
+            ),
+          notes: [
+            blockReason,
+            "Browser fixture lifecycle did not " +
+              "resolve an applicable provider.",
+          ],
+          deterministicEvidence: [],
+        };
+} else if (
+  genericBrowserLegacyReplaySuppressed
+) {
+  const assertionHandoffCase =
+    genericBrowserAssertionHandoffCase;
+
+  if (!assertionHandoffCase) {
+    stepResult = {
+      status: "MANUAL_REQUIRED",
+      reasonCategory:
+        "AUTOMATION_LIMITATION",
+      notes: [
+        `Generic browser navigation executed ` +
+          `${genericBrowserExecutedSteps} safe ` +
+          `state-changing action(s) before ` +
+          `${
+            genericBrowserBudgetExhausted
+              ? "reaching the bounded safety fuse"
+              : `stopping at ${
+                  genericBrowserStopReason ||
+                  "a safe terminal boundary"
+                }`
+          }.`,
+        "Legacy compatibility step replay was " +
+          "suppressed because autonomous navigation " +
+          "already changed the browser state; " +
+          "replaying prerequisite navigation from " +
+          "an earlier assumed state would not be " +
+          "safely grounded.",
+        genericBrowserStopReason ===
+        "GOAL_ALREADY_SATISFIED"
+          ? "No canonical deterministic assertion " +
+            "steps were available for autonomous " +
+            "assertion handoff."
+          : "Canonical assertions were not executed " +
+            "because autonomous navigation did not " +
+            "reach GOAL_ALREADY_SATISFIED.",
+      ],
+      deterministicEvidence: [],
+    };
+  } else {
+    const assertionHandoffResult =
+      await runGenericBrowserSteps(
+        page,
+        assertionHandoffCase,
+        undefined,
+        undefined,
+        {
+          visibleFieldProvenance,
+          executionPersona: persona,
+        }
+      );
+
+    if (
+      genericBrowserGoalIteration !==
+      null
+    ) {
+      genericBrowserUsefulnessEvents.push({
+        kind:
+          "HANDOFF_RESULT_RECORDED",
+        iteration:
+          genericBrowserGoalIteration,
+        attempted: true,
+        passed:
+          assertionHandoffResult.status ===
+          "PASS",
+      });
+    }
+
+    const fixtureNotes =
+      fixturePreparation.status ===
+      "READY"
+        ? [
+            `Browser fixture provider ` +
+              `"${fixturePreparation.providerId}" ` +
+              `prepared the required state.`,
+            ...fixturePreparation.notes,
+          ]
+        : [];
+
+    const fixtureEvidence =
+      fixturePreparation.status ===
+      "READY"
+        ? fixturePreparation
+            .deterministicEvidence
+        : [];
+
+    const assertionHandoffFailed =
+      assertionHandoffResult.status ===
+      "FAIL";
+
+    if (
+      assertionHandoffResult.status ===
+      "PASS"
+    ) {
+      stepResult = {
+      ...assertionHandoffResult,
+
+      ...(
+        assertionHandoffFailed
+          ? {
+              status:
+                "MANUAL_REQUIRED" as const,
+              reasonCategory:
+                "AUTOMATION_LIMITATION",
+            }
+          : {}
+      ),
+
+      notes: [
+        ...fixtureNotes,
+
+        `Generic browser navigation reached ` +
+          `GOAL_ALREADY_SATISFIED after ` +
+          `${genericBrowserExecutedSteps} verified ` +
+          `state-changing action(s).`,
+
+        "Canonical deterministic assertions were " +
+          "executed from the reached state without " +
+          "replaying planner-authored interaction steps.",
+
+        ...(
+          assertionHandoffFailed
+            ? [
+                "Assertion mismatch after autonomous " +
+                  "navigation was kept verdict-neutral " +
+                  "because the autonomous path is not " +
+                  "itself a product-failure oracle.",
+              ]
+            : []
+        ),
+
+        ...assertionHandoffResult.notes,
+      ],
+
+      deterministicEvidence: [
+        ...fixtureEvidence,
+        ...(
+          assertionHandoffResult
+            .deterministicEvidence ??
+          []
+        ),
+      ],
+    };
+    /*
+ * AUTONOMOUS_ACCEPTANCE_CHECKPOINT_V1
+ *
+ * Autonomous navigation may reach a transient modal, drawer,
+ * popover or nested editor state that is later closed during
+ * cleanup.
+ *
+ * Capture the reached acceptance state after canonical
+ * deterministic verification and before cleanup. This is
+ * supplementary visual evidence only; it is not a deterministic
+ * oracle and cannot create PASS by itself.
+ */
+try {
+  const acceptanceCheckpointPath =
+    `${checkpointDirectory}/` +
+    `acceptance-state.png`;
+
+  await page.screenshot({
+    path: acceptanceCheckpointPath,
+    fullPage: false,
+  });
+
+  checkpointEvidence.push({
+    stepIndex: 0,
+    action: "acceptance-state",
+    label:
+      "autonomous acceptance state",
+    note:
+      "Captured the browser state after canonical deterministic verification and before cleanup.",
+    screenshotPath:
+      acceptanceCheckpointPath,
+    url: page.url(),
+  });
+
+  console.log(
+    ` Evidence checkpoint captured: ` +
+      `action=autonomous acceptance state, ` +
+      `path=${acceptanceCheckpointPath}`
+  );
+} catch (error: any) {
+  console.log(
+    ` Evidence checkpoint skipped safely: ` +
+      `action=autonomous acceptance state, ` +
+      `reason=${String(
+        error?.message || error
+      )}`
+  );
+}
+    } else {
+      console.log(
+        ` Generic browser deterministic handoff ` +
+          `returned ${assertionHandoffResult.status}; ` +
+          `the autonomous state will not be accepted.`
+      );
+
+      await restoreFreshCompatibilityPage(
+        `deterministic handoff returned ` +
+          `${assertionHandoffResult.status}`
+      );
+
+      await logVisibleAssessmentControls(
+        page,
+        testCase
+      );
+
+      await prepareAssessmentLanguageModal(
+        page,
+        testCase
+      );
+    }
+  }
+}
+
+/*
+ * GENERIC_BROWSER_USEFULNESS_STRUCTURED_EMISSION_V1
+ *
+ * Emit one machine-readable record for the autonomous
+ * generic-browser lifecycle.
+ *
+ * Human-readable Notes / Trace output may repeat terminal
+ * outcomes and must not be used as the metric source of truth.
+ *
+ * Compatibility execution below is intentionally excluded.
+ */
+if (
+  genericBrowserUsefulnessEvents.length >
+  0
+) {
+  const genericBrowserUsefulnessSummary =
+    summarizeGenericBrowserUsefulness(
+      genericBrowserUsefulnessEvents
+    );
+  const capabilityEvaluations =
+    genericBrowserCapabilityRecognitions.map(
+      (recognition) => recognition.evaluation
+    );
+  const genericBrowserCapabilityTelemetry =
+    summarizeBrowserOperationalCapabilities(
+      capabilityEvaluations
+    );
+  const capabilityFamilies = [
+    "SELECTED_STATE_OPERATIONAL_CAPABILITY",
+    "PAGINATION_OPERATIONAL_CAPABILITY",
+  ] as const;
+  const genericBrowserCapabilityTelemetryByFamily =
+    Object.fromEntries(
+      capabilityFamilies.map((capabilityKind) => [
+        capabilityKind,
+        summarizeBrowserOperationalCapabilities(
+          capabilityEvaluations.filter(
+            (evaluation) =>
+              evaluation.capabilityKind === capabilityKind
+          )
+        ),
+      ])
+    );
+
+  genericBrowserUsefulnessCaseRecords.push({
+    issueKey:
+      String(plan.issueKey || ""),
+    caseId:
+      String(testCase.id || ""),
+    events:
+      [...genericBrowserUsefulnessEvents],
+    summary:
+      genericBrowserUsefulnessSummary,
+    capabilityRecognitions:
+      [...genericBrowserCapabilityRecognitions],
+    capabilityTelemetry:
+      genericBrowserCapabilityTelemetry,
+    capabilityTelemetryByFamily:
+      genericBrowserCapabilityTelemetryByFamily,
+  });
+
+  console.log(
+    `GENERIC_BROWSER_USEFULNESS_TELEMETRY_V1 ` +
+      JSON.stringify({
+        issueKey:
+          String(plan.issueKey || ""),
+        caseId:
+          String(testCase.id || ""),
+        events:
+          genericBrowserUsefulnessEvents,
+        summary:
+          genericBrowserUsefulnessSummary,
+        operationalCapabilities: {
+          recognitions:
+            genericBrowserCapabilityRecognitions,
+          aggregate:
+            genericBrowserCapabilityTelemetry,
+          byFamily:
+            genericBrowserCapabilityTelemetryByFamily,
+        },
+      })
+  );
+}
+
+if (!stepResult) {
+        const genericStepResult =
+          await runGenericBrowserSteps(
           page,
           testCase,
           async ({
@@ -5804,8 +3059,302 @@ if (signedInPersona !== persona) {
 deferredCleanups.push(
   cleanup
 );
+          },
+          {
+            visibleFieldProvenance,
+            executionPersona: persona,
           }
         );
+
+        const fixtureNotes =
+          fixturePreparation.status ===
+            "READY"
+            ? [
+                `Browser fixture provider ` +
+                  `"${fixturePreparation.providerId}" ` +
+                  `prepared the required state.`,
+                ...fixturePreparation.notes,
+              ]
+            : [];
+
+        const fixtureEvidence =
+          fixturePreparation.status ===
+            "READY"
+            ? fixturePreparation
+                .deterministicEvidence
+            : [];
+
+        stepResult = {
+          ...genericStepResult,
+          notes: [
+            ...fixtureNotes,
+            ...genericStepResult.notes,
+          ],
+          deterministicEvidence: [
+            ...fixtureEvidence,
+            ...(
+              genericStepResult
+                .deterministicEvidence ??
+              []
+            ),
+          ],
+        };
+      }
+
+      if (
+        (testCase.deterministicProofBindings?.length ?? 0) > 0 &&
+        !["BLOCKED", "ERROR"].includes(stepResult.status)
+      ) {
+        stepResult.runtimeFixturePreparations =
+          mergeRuntimeFixturePreparations(
+            preGenericFixtureDispatch.preparations,
+            stepResult.runtimeFixturePreparations ?? []
+          );
+        const proofResults = await executeBrowserEvidenceContractProofs({
+          page,
+          testCase,
+          actualPersona: persona,
+          deterministicEvidence:
+            stepResult.deterministicEvidence ?? [],
+          runtimeFixturePreparations:
+            stepResult.runtimeFixturePreparations ?? [],
+        });
+        runProofResults.push(...proofResults);
+        stepResult.evidenceContractProofResults = proofResults;
+        stepResult.evidenceContractProofCoverage =
+          summarizeBrowserEvidenceContractProofCoverage({
+            bindings: testCase.deterministicProofBindings ?? [],
+            results: proofResults,
+          });
+      }
+
+      /*
+       * SOURCE_BOUND_ASSERTION_SET_RUNTIME_V1
+       *
+       * Canonical assertion handoff remains the normal source-bound proof
+       * owner. A second, narrower path exists only for source-derived exact
+       * button presence on an already confirmed composed runtime target.
+       *
+       * COMPOSED_RUNTIME_STRUCTURAL_TARGET_PROOF_V1
+       *
+       * Composed preparation independently verifies persona, ownership,
+       * fixture predicates, entity identity, and the exact concrete route.
+       *
+       * It may ground a fresh structural BUTTON_LABEL observation only when:
+       * - autonomous navigation reached its terminal goal;
+       * - no generic state-changing action executed;
+       * - planner compatibility steps are observation-only;
+       * - the browser is still on the exact composed route.
+       *
+       * Planner prose and GOAL_ALREADY_SATISFIED never create proof authority.
+       */
+      const sourceBoundAcceptedRoutePath =
+        browserSourceBoundAssertionPathOf(
+          page.url()
+        );
+
+      const sourceBoundComposedPreparation =
+        testCase.composedRuntimeResolution
+          ? composedPreparations.get(
+              testCase.id
+            )
+          : undefined;
+
+      const sourceBoundComposedPlannerStepsObservationOnly =
+        (testCase.steps ?? []).every(
+          (step: BrowserStep) =>
+            [
+              "wait",
+              "assertUrlContains",
+              "assertUrlNotContains",
+              "assertTextVisible",
+              "assertTextNotVisible",
+              "assertSurfaceControls",
+            ].includes(
+              String(step?.action || "")
+            )
+        );
+
+      const sourceBoundComposedTargetGrounded =
+        Boolean(
+          !testCase.executionPolicy &&
+          testCase.composedRuntimeResolution &&
+          genericBrowserReachedGoal &&
+          genericBrowserExecutedSteps === 0 &&
+          sourceBoundComposedPlannerStepsObservationOnly &&
+          sourceBoundComposedPreparation &&
+          composedPreparationAllowsInteraction(
+            testCase,
+            sourceBoundComposedPreparation,
+            persona
+          ) &&
+          sourceBoundAcceptedRoutePath &&
+          browserSourceBoundAssertionPathOf(
+            String(
+              sourceBoundComposedPreparation
+                .navigationBinding
+                ?.concreteRoute || ""
+            )
+          ) === sourceBoundAcceptedRoutePath
+        );
+
+      if (
+        !testCase.executionPolicy &&
+        (
+          genericBrowserHasAssertionHandoff ||
+          sourceBoundComposedTargetGrounded
+        )
+      ) {
+        const allRequirements =
+          buildBrowserSourceBoundAssertionSetRequirements({
+            testCase,
+            obligationLedger:
+              plan.acceptanceObligationLedger,
+            sourceLedger:
+              plan.acceptanceSourceLedger,
+            acceptedRoutePath:
+              sourceBoundAcceptedRoutePath,
+          });
+
+        /*
+         * Without canonical assertion handoff, composed target grounding may
+         * transport only the pre-existing source-derived exact-button family.
+         * General text assertions remain closed.
+         */
+        const requirements =
+          genericBrowserHasAssertionHandoff
+            ? allRequirements
+            : allRequirements.filter(
+                (requirement) =>
+                  requirement.semanticFamily ===
+                    "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1" &&
+                  requirement.buttonCarrier?.kind ===
+                    "SOURCE_DERIVED_EXACT_VISIBLE_BUTTON"
+              );
+        const allocations =
+          allocateBrowserRuntimeSourceAssertions({
+            currentCase: testCase,
+            allCases: executionCases,
+            obligationLedger:
+              plan.acceptanceObligationLedger,
+            requirements,
+          });
+        const buttonCarrierObservations =
+          observeBrowserSourceDerivedButtonCarriers({
+            requirements,
+            observation: await observeBrowserPage(page),
+            targetContextGrounded:
+              (
+                genericBrowserReachedGoal &&
+                genericBrowserHasAssertionHandoff
+              ) ||
+              sourceBoundComposedTargetGrounded,
+          });
+        const evidence = requirements.map(
+          (requirement) =>
+            evaluateBrowserSourceBoundAssertionSet({
+              requirement,
+              deterministicEvidence:
+                stepResult.deterministicEvidence ?? [],
+              actualPersona: persona,
+              actualRoutePath:
+                sourceBoundAcceptedRoutePath,
+              freshObservation:
+                (
+                  genericBrowserReachedGoal &&
+                  genericBrowserHasAssertionHandoff
+                ) ||
+                sourceBoundComposedTargetGrounded,
+              buttonCarrierObservations,
+            })
+        );
+        const discharges = requirements.flatMap(
+          (requirement, index) => {
+            const decision =
+              evaluateBrowserSourceBoundAssertionSetDischarge({
+                testCase,
+                obligationLedger:
+                  plan.acceptanceObligationLedger,
+                allocation: allocations.find(
+                  (allocation) =>
+                    allocation.obligationId ===
+                    requirement.obligationId
+                ),
+                requirement,
+                evidence: evidence[index]!,
+              });
+            return decision.status ===
+              "DETERMINISTIC_OBLIGATION_PROVED"
+              ? [decision.discharge]
+              : [];
+          }
+        );
+        stepResult.sourceBoundAssertionSetRequirements =
+          requirements;
+        stepResult.sourceBoundAssertionSetEvidence = evidence;
+        stepResult.runtimeSourceAssertionAllocations =
+          allocations;
+        stepResult.sourceBoundAssertionSetPassProofs =
+          requirements.flatMap((requirement, index) => {
+            const allocation = allocations.find(
+              (candidate) =>
+                candidate.obligationId === requirement.obligationId
+            );
+            return allocation
+              ? [{
+                  kind: "SOURCE_BOUND_ASSERTION_SET" as const,
+                  requirement,
+                  evidence: evidence[index]!,
+                  allocation,
+                }]
+              : [];
+          });
+        stepResult.deterministicObligationDischarges = [
+          ...(stepResult.deterministicObligationDischarges ?? []),
+          ...discharges,
+        ];
+        stepResult.caseProofReadiness =
+          auditBrowserCaseProofReadiness({
+            testCase,
+            discharges:
+              stepResult.deterministicObligationDischarges,
+            browserObligationBindings:
+              plan.browserObligationBindings,
+          });
+      }
+
+      /*
+       * SOURCE_BOUND_STRUCTURAL_CONTROL_PRESENCE_V1
+       *
+       * A terminal autonomous navigation result merely permits a fresh
+       * observation. The source ledger, not that terminal result, creates
+       * the structural requirement; missing observations stay non-confirming.
+       */
+      if (!testCase.executionPolicy && genericBrowserReachedGoal) {
+        const structuralRequirements =
+          buildBrowserSourceBoundStructuralControlPresenceRequirements({
+            testCase,
+            executionObligationIds:
+              testCase.executionIntentAuthority?.executionObligationIds ??
+              testCase.executionVerdictScope?.executionObligationIds ?? [],
+            obligationLedger: plan.acceptanceObligationLedger,
+            sourceLedger: plan.acceptanceSourceLedger,
+            acceptedRoutePath: sourceBoundAcceptedRoutePath,
+          });
+        if (structuralRequirements.length > 0) {
+          const observation = await observeBrowserPage(page);
+          stepResult.structuralControlPresenceRequirements = structuralRequirements;
+          stepResult.structuralControlPresenceEvidence = structuralRequirements.map((requirement) =>
+            evaluateBrowserSourceBoundStructuralControlPresence({
+              requirement,
+              observation,
+              actualPersona: persona,
+              actualRoutePath: sourceBoundAcceptedRoutePath,
+              freshObservation: true,
+            })
+          );
+        }
+      }
 
       const passSemanticGuardReason =
         stepResult.status === "PASS"
@@ -5831,6 +3380,29 @@ deferredCleanups.push(
             passSemanticGuardReason
         );
       }
+      const manualAcceptanceCoverageGapReason =
+        stepResult.status === "PASS"
+          ? getBrowserManualAcceptanceCoverageGapReason(
+              testCase,
+              stepResult
+            )
+          : null;
+
+      if (manualAcceptanceCoverageGapReason) {
+        stepResult.status =
+          "MANUAL_REQUIRED";
+        stepResult.reasonCategory =
+          "ACCEPTANCE_COVERAGE_GAP";
+        stepResult.notes.push(
+          manualAcceptanceCoverageGapReason
+        );
+
+        console.log(
+          " Browser PASS acceptance completeness guard: " +
+            manualAcceptanceCoverageGapReason
+        );
+      }
+
       const screenshotPath =
         `qa-results/evidence/` +
         `${testCase.id}-screenshot.png`;
@@ -5866,6 +3438,12 @@ await executeDeferredCleanups(
 );
 
         deferredCleanupExecuted = true;
+
+        caseRuntimeAudit.recordPersistence(
+          cleanupExecution.ok
+            ? "CLEAN"
+            : "VIOLATION"
+        );
 
         stepResult.notes.push(
           ...cleanupExecution.notes
@@ -5989,10 +3567,180 @@ pendingEvidenceReviews.push({
 
       console.log(` Trace: ${formatTrace(trace)}`);
 
+      if (stepResult.reasonCategory === "TEST_DATA_ISSUE") {
+        caseRuntimeAudit.recordTestData("TEST_DATA_ISSUE");
+      }
+      caseRuntimeAudit.completeSafetyAccounting();
+      const finalizedRuntimeAudit = caseRuntimeAudit.finish();
+      const runtimeAuditSignals =
+        deriveBrowserCaseRuntimeSafetySignals(
+          finalizedRuntimeAudit
+        );
+      console.log(
+        "BROWSER_DETERMINISTIC_PASS_RUNTIME_AUDIT_V1 " +
+          JSON.stringify({
+            caseId: testCase.id,
+            safetyViolation: runtimeAuditSignals.safetyViolation,
+            productNonGetCount: runtimeAuditSignals.productNonGetCount,
+            persistenceViolation: runtimeAuditSignals.persistenceViolation,
+            testDataIssue: runtimeAuditSignals.testDataIssue,
+        })
+      );
+
+      const finalizedComposedPreparation =
+        testCase.composedRuntimeResolution
+          ? composedPreparations.get(
+              testCase.id
+            )
+          : undefined;
+
+      const fixtureStatus =
+        testCase.composedRuntimeResolution
+          ? finalizedComposedPreparation
+            ? normalizeBrowserDeterministicPassFixtureStatus({
+                path: "COMPOSED",
+                result:
+                  finalizedComposedPreparation,
+              })
+            : {
+                status:
+                  "UNAVAILABLE" as const,
+                reason:
+                  "Composed runtime preparation was not retained for final verdict derivation.",
+              }
+          : fixturePreparation.status ===
+              "READY"
+            ? normalizeBrowserDeterministicPassFixtureStatus({
+                path: "PREPARATION",
+                result: fixturePreparation,
+                fixtureRequired: true,
+              })
+            : normalizeBrowserDeterministicPassFixtureStatus({
+              path: "RUNTIME_RESOLUTION",
+                result:
+                  preGenericFixtureDispatch,
+              });
+      const structuralControlPresenceProofs =
+        (stepResult.structuralControlPresenceRequirements ?? []).flatMap((requirement) => {
+          const matchingEvidence =
+            (stepResult.structuralControlPresenceEvidence ?? []).filter((evidence) =>
+              evidence.proofRequirementId === requirement.requirementId &&
+              evidence.obligationId === requirement.obligationId &&
+              evidence.executionCaseId === requirement.executionCaseId
+            );
+          const evidence = matchingEvidence[0];
+          return matchingEvidence.length === 1 && evidence
+            ? [{ requirement, evidence }]
+            : [];
+        });
+      const proofSignals = deriveBrowserDeterministicProofRuntimeSignals({
+        testCase,
+        ...(plan.acceptanceObligationLedger ? { obligationLedger: plan.acceptanceObligationLedger } : {}),
+        ...(plan.browserObligationBindings ? { browserObligationBindings: plan.browserObligationBindings } : {}),
+        localStateProofs: stepResult.localStatePassProofs ?? [],
+        sourceBoundAssertionSetProofs: stepResult.sourceBoundAssertionSetPassProofs ?? [],
+        structuralControlPresenceProofs,
+        deterministicObligationDischarges: stepResult.deterministicObligationDischarges ?? [],
+        ...(stepResult.caseProofReadiness ? { caseProofReadiness: stepResult.caseProofReadiness } : {}),
+        acceptedRoutePath: browserSourceBoundAssertionPathOf(page.url()),
+        actualPersona: persona,
+      });
+      const deterministicPassRuntimeContext = buildBrowserDeterministicPassRuntimeContext({
+        fixtureStatus,
+        ...(browserSourceBoundAssertionPathOf(page.url()) ? { acceptedRoutePath: { status: "AVAILABLE" as const, value: browserSourceBoundAssertionPathOf(page.url())!, source: "Final accepted runtime route." } } : {}),
+        ...proofSignals,
+        ...runtimeAuditSignals,
+      });
+      stepResult.deterministicPassRuntimeContext = deterministicPassRuntimeContext;
+      const acceptedRoutePath =
+        browserSourceBoundAssertionPathOf(
+          page.url()
+        );
+
+      const runtimeVerdictContract =
+        materializeBrowserRuntimeExecutionContract({
+          testCase,
+          executionCheckContract:
+            testCase.executionCheckContract,
+          acceptedRoutePath,
+          sourceBoundAssertionSetRequirements:
+            stepResult
+              .sourceBoundAssertionSetRequirements ??
+            [],
+          structuralControlPresenceRequirements:
+            stepResult.structuralControlPresenceRequirements ?? [],
+        });
+
+      const caseVerdict = deriveBrowserCaseVerdict({
+        testCase:
+          runtimeVerdictContract.testCase,
+        ...(
+          runtimeVerdictContract
+            .executionCheckContract
+            ? {
+                executionCheckContract:
+                  runtimeVerdictContract
+                    .executionCheckContract,
+              }
+            : {}
+        ),
+        executionAuthority: {
+          actualPersona: {
+            status: "AVAILABLE",
+            value: persona,
+            source: "Final authenticated browser persona.",
+          },
+          ...(acceptedRoutePath
+            ? {
+                acceptedRoutePath: {
+                  status: "AVAILABLE" as const,
+                  value: acceptedRoutePath,
+                  source: "Final accepted runtime route.",
+                },
+              }
+            : {
+                acceptedRoutePath: {
+                  status: "UNAVAILABLE" as const,
+                  reason: "No accepted runtime route was finalized.",
+                },
+              }),
+          targetVerified: proofSignals.targetVerified,
+          fixtureStatus,
+        },
+        runtimeAudit: finalizedRuntimeAudit,
+        runnerStatus: stepResult.status,
+        sourceBoundAssertionSetRequirements:
+          stepResult.sourceBoundAssertionSetRequirements ?? [],
+        sourceBoundAssertionSetEvidence:
+          stepResult.sourceBoundAssertionSetEvidence ?? [],
+        structuralControlPresenceRequirements:
+          stepResult.structuralControlPresenceRequirements ?? [],
+        structuralControlPresenceEvidence:
+          stepResult.structuralControlPresenceEvidence ?? [],
+        deterministicEvidence: stepResult.deterministicEvidence ?? [],
+        localStateTransitionEvidence:
+          stepResult.localStateTransitionEvidence ?? [],
+        evidenceContractProofResults:
+          stepResult.evidenceContractProofResults ?? [],
+      });
+      applyBrowserCaseVerdict(stepResult, caseVerdict);
+      attemptDeterministicBrowserPass({
+        testCase,
+        obligationLedger: plan.acceptanceObligationLedger,
+        browserObligationBindings: plan.browserObligationBindings,
+        currentResult: stepResult,
+        localStatePassProofs: stepResult.localStatePassProofs ?? [],
+        sourceBoundAssertionSetPassProofs:
+          stepResult.sourceBoundAssertionSetPassProofs ?? [],
+        deterministicPassRuntimeContext,
+      });
+
       results.push({
         id: testCase.id,
         status: stepResult.status,
         reasonCategory: stepResult.reasonCategory,
+        deterministicPassRuntimeContext,
+        caseVerdict: stepResult.caseVerdict,
         evidenceReview,
         startRoute: testCase.startRoute,
         evidence: [
@@ -6032,6 +3780,91 @@ pendingEvidenceReviews.push({
                 )
                 .join(", ")
             : "",
+          (
+            stepResult.orderingEvidence
+              ?.length ?? 0
+          ) > 0
+            ? `Ordering evidence (verdict-neutral): ` +
+              stepResult.orderingEvidence!
+                .map((item) =>
+                  `${item.requirementId}=${item.status} ` +
+                  `semantic=${item.semanticDimension || "unavailable"} ` +
+                  `${item.direction}/${item.comparisonType} ` +
+                  `collection=${item.collectionLabel || "unavailable"} ` +
+                  `identity=${item.collectionIdentityMethod || "unavailable"} ` +
+                  `schema=${JSON.stringify(item.visibleFields || [])} ` +
+                  `rows=${item.rowCount} ` +
+                  `rowIdentities=${item.groundedRowIdentityCount ?? 0} ` +
+                  `rowSequence=${item.rowSequenceObserved === true ? "observed" : "unavailable"} ` +
+                  `requirementField=${item.requirementField || "unavailable"} ` +
+                  `proofField=${item.proofField || "unavailable"} ` +
+                  `binding=${item.proofFieldBindingId || "unavailable"} ` +
+                  `proposalSource=${item.proofFieldProposalSource || "unavailable"} ` +
+                  `authority=${item.proofFieldAuthority || "unavailable"} ` +
+                  `bindingSourceRef=${item.proofFieldSourceRef || "unavailable"} ` +
+                  `field=${item.field || "unavailable"} ` +
+                  `mapping=${item.mappingResolutionStatus || "unavailable"} ` +
+                  `mappingKind=${item.mappingKind || "unavailable"} ` +
+                  `sourceFields=${JSON.stringify(item.mappingSourceFields || [])} ` +
+                  `sourceRef=${item.mappingSourceRef ? JSON.stringify(item.mappingSourceRef) : "unavailable"} ` +
+                  `sourceCommitRef=${item.mappingSourceCommitRef || "unavailable"} ` +
+                  `reason=${item.reason || "none"} ` +
+                  `values=${JSON.stringify(item.values)}`
+                )
+                .join(", ")
+            : "",
+          (
+            stepResult
+              .runtimeTopTabObservations
+              ?.length ?? 0
+          ) > 0
+            ? `Runtime tab observations: ` +
+              stepResult
+                .runtimeTopTabObservations!
+                .map(
+                  (item) =>
+                    `step ${item.stepIndex} ` +
+                    `target="${item.targetTabLabel}" ` +
+                    `observedActive=${
+                      item.observedActiveTabLabel
+                        ? `"${item.observedActiveTabLabel}"`
+                        : "none"
+                    } ` +
+                    `activeStateVerified=${item.activeStateVerified} ` +
+                    `source=${item.activeStateSource ?? "none"} ` +
+                    `urlChanged=${item.urlChanged}`
+                )
+                .join(", ")
+            : "",
+          (
+            stepResult
+              .expandedSurfaceObservations
+              ?.length ?? 0
+          ) > 0
+            ? `Expanded surface observations: ` +
+              stepResult
+                .expandedSurfaceObservations!
+                .map(
+                  (item) =>
+                    `step ${item.stepIndex} ` +
+                    `trigger="${item.triggerText}" ` +
+                    `context=${
+                      item.contextText
+                        ? `"${item.contextText}"`
+                        : "none"
+                    } ` +
+                    `interactionSucceeded=${item.interactionSucceeded} ` +
+                    `expandedSurfaceVerified=${item.expandedSurfaceVerified} ` +
+                    `surface=${item.surfaceType ?? "none"} ` +
+                    `name=${
+                      item.surfaceName
+                        ? `"${item.surfaceName}"`
+                        : "none"
+                    } ` +
+                    `source=${item.verificationSource ?? "none"}`
+                )
+                .join(", ")
+            : "",
           `Success signal: ${successSignal}`,
           `Success signal reached: ${successSignalReached}`,
           evidenceReviewText,
@@ -6045,20 +3878,129 @@ pendingEvidenceReviews.push({
         successSignal,
         successSignalReached,
         evidenceSummary,
-        checkpointEvidence,
-        deterministicEvidence:
-          stepResult.deterministicEvidence ??
-          [],
-        trace,
+checkpointEvidence,
+deterministicEvidence:
+  stepResult.deterministicEvidence ??
+  [],
+...(
+  stepResult.terminationReason
+    ? {
+        terminationReason:
+          stepResult.terminationReason,
+      }
+    : {}
+),
+collectionFilterEvidence:
+  stepResult.collectionFilterEvidence ??
+  [],
+localStateTransitionEvidence:
+  stepResult.localStateTransitionEvidence ??
+  [],
+deterministicObligationDischarges:
+  stepResult.deterministicObligationDischarges ??
+  [],
+sourceBoundAssertionSetRequirements:
+  stepResult.sourceBoundAssertionSetRequirements ??
+  [],
+sourceBoundAssertionSetEvidence:
+  stepResult.sourceBoundAssertionSetEvidence ??
+  [],
+runtimeSourceAssertionAllocations:
+  stepResult.runtimeSourceAssertionAllocations ??
+  [],
+sourceBoundAssertionSetPassProofs:
+  stepResult.sourceBoundAssertionSetPassProofs ??
+  [],
+localStatePassProofs:
+  stepResult.localStatePassProofs ??
+  [],
+...(
+  stepResult.caseProofReadiness
+    ? {
+        caseProofReadiness:
+          stepResult.caseProofReadiness,
+      }
+    : {}
+),
+...(
+  stepResult.deterministicPassEligibility
+    ? {
+        deterministicPassEligibility:
+          stepResult.deterministicPassEligibility,
+      }
+    : {}
+),
+...(
+  stepResult.deterministicPassValidationContext
+    ? {
+        deterministicPassValidationContext:
+          stepResult.deterministicPassValidationContext,
+      }
+    : {}
+),
+orderingEvidence:
+  stepResult.orderingEvidence ??
+  [],
+orderingEvidenceParity:
+  stepResult.orderingEvidenceParity,
+interactionExecutionEvidence:
+  stepResult
+    .interactionExecutionEvidence ??
+  [],
+runtimeTopTabObservations:
+  stepResult
+    .runtimeTopTabObservations ??
+  [],
+expandedSurfaceObservations:
+  stepResult
+    .expandedSurfaceObservations ??
+  [],
+runtimeFixturePreparations:
+  stepResult
+    .runtimeFixturePreparations ??
+  [],
+evidenceContractProofResults:
+  stepResult
+    .evidenceContractProofResults ??
+  [],
+evidenceContractProofCoverage:
+  stepResult
+    .evidenceContractProofCoverage ??
+  [],
+trace,
       });
     } catch (error: any) {
       console.log(` Error: ${error.message}`);
+      const runnerErrorCaseVerdict = deriveBrowserCaseVerdict({
+        testCase,
+        executionCheckContract: testCase.executionCheckContract,
+        executionAuthority: {
+          actualPersona: {
+            status: "UNAVAILABLE",
+            reason: "Runner terminated before a final persona authority could be recorded.",
+          },
+          acceptedRoutePath: {
+            status: "UNAVAILABLE",
+            reason: "Runner terminated before a final route authority could be recorded.",
+          },
+          targetVerified: {
+            status: "UNAVAILABLE",
+            reason: "Runner terminated before final target verification.",
+          },
+          fixtureStatus: {
+            status: "UNAVAILABLE",
+            reason: "Runner terminated before a final fixture lifecycle result.",
+          },
+        },
+        runnerStatus: "ERROR",
+      });
       results.push({
         id: testCase.id,
         status: "ERROR",
         reasonCategory: "AGENT_RUNTIME_ERROR",
         startRoute: testCase.startRoute,
         evidence: error.message,
+        caseVerdict: runnerErrorCaseVerdict,
       });
     } finally {
       /*
@@ -6228,6 +4170,35 @@ const evidenceReview =
       });
 
     if (!evidenceReview) {
+      /*
+       * CANONICAL_CASE_VERDICT_SURVIVES_UNAVAILABLE_VISUAL_REVIEW_V1
+       *
+       * Screenshot/video review is supplementary. Once a typed canonical
+       * caseVerdict exists, review unavailability cannot independently
+       * replace that verdict with MANUAL_REQUIRED.
+       *
+       * Legacy results without caseVerdict retain the historical fallback
+       * behavior below.
+       */
+      if (currentResult.caseVerdict) {
+        reconcileBrowserResultFromEvidence({
+          currentResult,
+          testCase:
+            pendingReview.testCase,
+          review: null,
+          source: "screenshot",
+        });
+
+        console.log(
+          ` Evidence reconciliation: [` +
+            `${pendingReview.testCase.id}] ` +
+            `canonical case verdict retained ` +
+            `(screenshot review unavailable)`
+        );
+
+        continue;
+      }
+
       if (
         pendingReview.currentStatus ===
           "PASS"
@@ -6480,6 +4451,63 @@ const evidenceReview =
     );
   }
 
+  const runProofCoverage =
+    summarizeBrowserEvidenceContractProofCoverage({
+      bindings: runProofBindings,
+      results: runProofResults,
+    });
+  for (const result of results) {
+    const caseBindingObligationIds = new Set(
+      (executionBrowserCases.find((item) => item.id === result.id)
+        ?.deterministicProofBindings ?? [])
+        .map((item) => item.obligationId)
+    );
+    if (caseBindingObligationIds.size === 0) continue;
+    result.evidenceContractProofCoverage = runProofCoverage.filter(
+      (item) => caseBindingObligationIds.has(item.obligationId)
+    );
+  }
+
+  for (const result of results) {
+    const testCase = executionBrowserCases.find((item) => item.id === result.id);
+    const acceptedRoute = result.deterministicPassRuntimeContext?.acceptedRoutePath;
+    const deepRouteBinding = testCase
+      ? getRuntimeDeepRouteBinding(testCase)
+      : undefined;
+    const reasonCode = deepRouteBinding && deepRouteBinding.status !== "RESOLVED"
+      ? deepRouteBinding?.status
+      : result.caseVerdict?.reason ?? result.reasonCategory;
+    const fixtureRequirement = testCase?.fixtureRequirements?.filter(Boolean).join("; ");
+    result.humanReadableResult = presentBrowserHumanReadableQaResult({
+      status: result.status,
+      reasonCategory: reasonCode,
+      caseVerdict: result.caseVerdict,
+      ...(acceptedRoute?.status === "AVAILABLE" ? { acceptedRoutePath: acceptedRoute.value } : {}),
+      ...(result.interactionExecutionEvidence?.length ? { interactionExecutionCount: result.interactionExecutionEvidence.length } : {}),
+      ...(result.terminationReason ? { terminationReason: result.terminationReason } : {}),
+      ...(result.videoPath ? { evidencePath: result.videoPath } : {}),
+      ...(reasonCode === "NO_COMPATIBLE_ENTITY" && fixtureRequirement ? {
+        resolutionRequest: {
+          kind: "EXECUTION_CONTEXT",
+          description: "Provide an exact QA fixture entity identity satisfying the recorded fixture requirement.",
+          requiredInputs: [{ key: "entityId", description: fixtureRequirement }],
+          rerunSupported: true,
+        },
+      } : {}),
+    });
+    if (
+      process.env.QA_RERUN_OF &&
+      process.env.QA_HUMAN_RESOLUTION_REQUEST_ID
+    ) {
+      result.rerunLineage = {
+        rerunOf: process.env.QA_RERUN_OF,
+        resolutionRequestId: process.env.QA_HUMAN_RESOLUTION_REQUEST_ID,
+        resolutionProvenance: "HUMAN_CONFIRMED_EXECUTION_CONTEXT",
+        resolvedInputKeys: ["entityId"],
+      };
+    }
+  }
+
   console.log(
     "\nFinal reconciled browser results:"
   );
@@ -6490,11 +4518,137 @@ const evidenceReview =
         `[${String(result.id)}] ` +
         `${String(result.status)}`
     );
+    if (result.humanReadableResult) {
+      console.log(formatBrowserHumanReadableQaResult(result.humanReadableResult));
+    }
   }
+
+  /*
+   * GENERIC_BROWSER_USEFULNESS_RUN_SUMMARY_V1
+   *
+   * Aggregate only typed case lifecycle telemetry.
+   *
+   * Rates are recomputed from summed numerators and
+   * denominators. Per-case rates are never averaged.
+   *
+   * This artifact is observational only and does not
+   * participate in execution, proof, evidence reconciliation,
+   * or final verdict selection.
+   */
+  const genericBrowserUsefulnessRunSummary =
+    aggregateGenericBrowserUsefulness(
+      genericBrowserUsefulnessCaseRecords.map(
+        (record) => record.summary
+      )
+    );
+  const genericBrowserCapabilityEvaluations =
+    genericBrowserUsefulnessCaseRecords.flatMap(
+      (record) =>
+        record.capabilityRecognitions.map(
+          (recognition) => recognition.evaluation
+        )
+    );
+  const genericBrowserOperationalCapabilities = {
+    aggregate:
+      summarizeBrowserOperationalCapabilities(
+        genericBrowserCapabilityEvaluations
+      ),
+    byFamily:
+      Object.fromEntries(
+        [
+          "SELECTED_STATE_OPERATIONAL_CAPABILITY",
+          "PAGINATION_OPERATIONAL_CAPABILITY",
+        ].map((capabilityKind) => [
+          capabilityKind,
+          summarizeBrowserOperationalCapabilities(
+            genericBrowserCapabilityEvaluations.filter(
+              (evaluation) =>
+                evaluation.capabilityKind === capabilityKind
+            )
+          ),
+        ])
+      ),
+  };
+
+  /*
+   * GENERIC_BROWSER_USEFULNESS_EXECUTION_PROFILE_ARTIFACT_V1
+   *
+   * This snapshot is resolved inside the smoke/browser process,
+   * where autonomous activation, model selection, and policy
+   * environment are actually visible.
+   *
+   * It is measurement metadata only. It cannot affect proposal
+   * selection, safety, execution, proof, reconciliation, or
+   * final verdict.
+   */
+  const genericBrowserUsefulnessExecutionProfile =
+    buildGenericBrowserUsefulnessExecutionProfile();
+
+  const genericBrowserUsefulnessRunArtifact = {
+    schemaVersion: 2 as const,
+    issueKey:
+      String(plan.issueKey || ""),
+    materializedBrowserRuntimeUnitCount:
+      browserExecutionSelection.materializedBrowserRuntimeUnitCount,
+    browserExecutionSelectedCount:
+      browserExecutionSelection.browserExecutionSelectedCount,
+    browserCaseCount:
+      executionBrowserCases.length,
+    autonomousCaseCount:
+      genericBrowserUsefulnessCaseRecords.length,
+    caseRecords:
+      genericBrowserUsefulnessCaseRecords,
+    executionProfile:
+      genericBrowserUsefulnessExecutionProfile,
+    aggregate:
+      genericBrowserUsefulnessRunSummary,
+    operationalCapabilities:
+      genericBrowserOperationalCapabilities,
+  };
+
+  const genericBrowserUsefulnessRunArtifactPath =
+    "qa-results/generic-browser-usefulness-run-summary.json";
+
+  fs.writeFileSync(
+    genericBrowserUsefulnessRunArtifactPath,
+    JSON.stringify(
+      genericBrowserUsefulnessRunArtifact,
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
+  console.log(
+    `GENERIC_BROWSER_USEFULNESS_RUN_SUMMARY_V1 ` +
+      JSON.stringify({
+        issueKey:
+          genericBrowserUsefulnessRunArtifact.issueKey,
+        browserCaseCount:
+          genericBrowserUsefulnessRunArtifact
+            .browserCaseCount,
+        autonomousCaseCount:
+          genericBrowserUsefulnessRunArtifact
+            .autonomousCaseCount,
+        artifactPath:
+          genericBrowserUsefulnessRunArtifactPath,
+        executionProfile:
+          genericBrowserUsefulnessExecutionProfile,
+        aggregate:
+          genericBrowserUsefulnessRunSummary,
+        operationalCapabilities:
+          genericBrowserOperationalCapabilities,
+      })
+  );
 
   console.log(
     "\nBrowser tests are completed"
   );
+
+  for (const result of results) {
+    const prepared = composedPreparations.get(result.id);
+    if (prepared) result.composedRuntimePreparation = prepared;
+  }
 
   return results;
 }

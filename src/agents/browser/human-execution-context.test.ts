@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildHumanResolutionSubmissionFromCandidate, buildTalentContractHumanResolutionCandidates, buildTalentContractHumanResolutionRequest, readHumanResolutionSubmission } from "./human-execution-context.js";
+import { buildContractFixtureRequirementContext } from "./fixtures/verified-contract-fixture-state.js";
+
+const request = buildTalentContractHumanResolutionRequest({ caseId: "case-1190", fixtureDescription: "Work Setup count = 0" });
+const read = (value: unknown) => () => JSON.stringify(value);
+const valid = () => ({ caseId: request.caseId, resolutionKind: "EXISTING_ENTITY_BINDING", requestId: request.requestId, inputs: { entityId: "387" }, provenance: "HUMAN_CONFIRMED_EXECUTION_CONTEXT" });
+test("valid exact human entity submission creates execution context", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read(valid()) })?.entityId, "387"));
+test("wrong case rejects", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read({ ...valid(), caseId: "other" }) }), undefined));
+test("wrong resolution kind rejects", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read({ ...valid(), resolutionKind: "OTHER" }) }), undefined));
+test("missing entity ID rejects", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read({ ...valid(), inputs: {} }) }), undefined));
+test("request identity rejects stale submission", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read({ ...valid(), requestId: "stale" }) }), undefined));
+test("unknown fields reject", () => assert.equal(readHumanResolutionSubmission({ path: "x", request, readFile: read({ ...valid(), verdict: "PASS" }) }), undefined));
+test("human provenance remains execution context only", () => { const result = readHumanResolutionSubmission({ path: "x", request, readFile: read(valid()) }); assert.equal(result?.provenance, "HUMAN_CONFIRMED_EXECUTION_CONTEXT"); assert.equal("verdict" in (result ?? {}), false); });
+test("exact empty Work Setup requirement remains a typed precondition", () => { const context = buildContractFixtureRequirementContext({ runtimeFixturePolicy: "exact", fixtureRequirements: ["Use a contract with no Work Setups assigned."] }); assert.deepEqual(context.requirements.map((item) => [item.key, item.expected]), [["contract.hasWorkSetups", false]]); });
+const candidate = (id: string, hasWorkSetups: boolean) => ({ identity: { entityKind: "contract", entityId: id, ownerId: "talent-1", ownershipVerified: true, identityVerified: true, persona: "talent" as const, source: "AUTHENTICATED_GET" as const }, facts: [{ key: "contract.hasWorkSetups", value: hasWorkSetups, verification: "EXACT_RELATED_RESOURCE" as const }] });
+const discovery = (items: ReturnType<typeof candidate>[]) => buildTalentContractHumanResolutionCandidates({ request, requirementContext: buildContractFixtureRequirementContext({ runtimeFixturePolicy: "exact", fixtureRequirements: ["Use a contract with no Work Setups assigned."] }), candidates: items, expectedOwnerId: "talent-1" });
+test("one compatible candidate is presented with verified facts", () => { const result = discovery([candidate("387", false)]); assert.equal(result.candidates[0]?.displayLabel, "Contract #387"); assert.deepEqual(result.candidates[0]?.facts, [{ label: "Work Setups assigned", value: "No" }]); });
+test("multiple compatible candidates remain selectable without auto-selection", () => assert.equal(discovery([candidate("387", false), candidate("388", false)]).candidates.length, 2));
+test("incompatible candidates are not selectable and zero candidates advertise rescan", () => { const result = discovery([candidate("412", true)]); assert.equal(result.candidates.length, 0); assert.equal(result.canRescan, true); assert.equal(result.automaticProvisioningAvailable, false); });
+test("candidate selection reuses the exact existing submission contract", () => { const submission = buildHumanResolutionSubmissionFromCandidate({ discovery: discovery([candidate("387", false)]), candidateIndex: 1 }); assert.deepEqual(submission, valid()); });
+test("invalid candidate selection cannot create execution context, proof, or verdict", () => { const result = buildHumanResolutionSubmissionFromCandidate({ discovery: discovery([candidate("387", false)]), candidateIndex: 2 }); assert.equal(result, undefined); });

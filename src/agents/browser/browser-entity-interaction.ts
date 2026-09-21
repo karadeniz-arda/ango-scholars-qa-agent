@@ -2,6 +2,13 @@ import type {
   Locator,
   Page,
 } from "playwright";
+import {
+  evaluateRuntimeInvoiceFixturePreparation,
+  requiresRuntimeInvoiceFixturePreparation,
+  runtimeFixturePreparationAllowsInteraction,
+  type BrowserRuntimeFixturePreparationResult,
+  type RuntimeInvoiceFixtureState,
+} from "./browser-runtime-fixture-preparation.js";
 
 /*
  * AS1014_NONREACT_EVIDENCE_V1
@@ -28,7 +35,7 @@ type VisibleInvoiceRow = {
   invoiceNumber: string;
 };
 
-export type InvoiceInteractionResult =
+export type InvoiceInteractionResult = (
   | {
       status: "OPENED";
       note: string;
@@ -51,7 +58,32 @@ export type InvoiceInteractionResult =
   | {
       status: "AUTOMATION_LIMITATION";
       note: string;
-    };
+    }
+) & {
+  runtimeFixturePreparation?:
+    BrowserRuntimeFixturePreparationResult;
+};
+
+export type PreparedRuntimeInvoiceFixture = {
+  result: BrowserRuntimeFixturePreparationResult;
+  candidate: VisibleInvoiceRow | null;
+  selectedTableView: string | null;
+};
+
+export function evaluateUniqueCompatibleFixtureCandidates(
+  candidateCount: number
+): { status: "UNIQUE" } | {
+  status: "BLOCKED";
+  reason: "NO_COMPATIBLE_CANDIDATE" | "AMBIGUOUS_COMPATIBLE_CANDIDATES";
+} {
+  if (candidateCount === 1) return { status: "UNIQUE" };
+  return {
+    status: "BLOCKED",
+    reason: candidateCount < 1
+      ? "NO_COMPATIBLE_CANDIDATE"
+      : "AMBIGUOUS_COMPATIBLE_CANDIDATES",
+  };
+}
 
 function escapeRegExp(
   value: string
@@ -866,6 +898,244 @@ async function trySelectInvoiceStateView(
   return null;
 }
 
+async function verifyInvoiceStateViewActive(
+  page: Page,
+  requiredState: RuntimeInvoiceFixtureState
+): Promise<boolean> {
+  const label =
+    requiredState === "processed"
+      ? "Processed"
+      : "Sent for Processing";
+  const pattern = new RegExp(
+    `^\\s*${escapeRegExp(label)}\\s*$`,
+    "i"
+  );
+  const main = page.locator("main").first();
+  const candidates = main.locator(
+    '[role="tab"], button, a'
+  );
+  let visibleMatchCount = 0;
+  let activeMatchCount = 0;
+
+  const count = Math.min(
+    await candidates.count().catch(() => 0),
+    100
+  );
+
+  for (let index = 0; index < count; index += 1) {
+      const item = candidates.nth(index);
+
+      if (!await item.isVisible().catch(() => false)) {
+        continue;
+      }
+
+      const itemLabel = String(
+        await item
+          .getAttribute("aria-label")
+          .catch(() => null) ||
+        await item
+          .innerText()
+          .catch(() => "")
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!pattern.test(itemLabel)) {
+        continue;
+      }
+
+      visibleMatchCount += 1;
+
+      const active = await item
+        .evaluate((element) => {
+          if (!(element instanceof HTMLElement)) {
+            return false;
+          }
+
+          const className =
+            typeof element.className === "string"
+              ? element.className
+              : "";
+
+          return (
+            element.getAttribute("aria-selected") === "true" ||
+            element.getAttribute("data-state") === "active" ||
+            element.getAttribute("aria-current") === "page" ||
+            element.getAttribute("aria-current") === "true" ||
+            /(^|\s)(active|selected)(\s|$)/i.test(className)
+          );
+        })
+        .catch(() => false);
+
+      if (active) {
+        activeMatchCount += 1;
+      }
+  }
+
+  return (
+    visibleMatchCount >= 1 &&
+    activeMatchCount === 1
+  );
+}
+
+/**
+ * The runtime-fixture contract is the canonical source-authorized carrier for
+ * an atomic invoice state. Planner tab steps remain a legacy interaction hint
+ * only; they must neither override nor be required to recover that state.
+ */
+export function runtimeInvoiceStateFromCase(
+  testCase: any
+): RuntimeInvoiceFixtureState | null {
+  const contract =
+    testCase?.runtimeFixtureResolutionContract;
+
+  if (contract) {
+    const members = Array.isArray(contract.members)
+      ? contract.members
+      : [];
+    const interactionExecutionCaseId = String(
+      contract.interactionExecutionCaseId || ""
+    ).trim();
+    const member = members.find(
+      (item: any) =>
+        String(item?.executionCaseId || "").trim() ===
+        interactionExecutionCaseId
+    );
+    const constraint =
+      member?.acceptanceFixtureConstraint;
+    const capability =
+      member?.fixtureResolutionCapability;
+    const constraintState =
+      constraint?.fixtureKind === "invoice" &&
+      constraint?.semantic?.kind === "STATE"
+        ? constraint.semantic.state
+        : null;
+    const capabilityState =
+      capability?.fixtureKind === "invoice" &&
+      capability?.resolverRef ===
+        "browser-visible-invoice-row"
+        ? capability.supportedState
+        : null;
+
+    if (
+      contract.status ===
+        "RUNTIME_FIXTURE_RESOLUTION_REQUIRED" &&
+      contract.policy === "ALL_REQUIRED" &&
+      members.length === 1 &&
+      constraintState &&
+      capabilityState === constraintState
+    ) {
+      return constraintState;
+    }
+
+    /* A present but malformed typed contract must not fall back to model steps. */
+    return null;
+  }
+
+  return inferRequiredInvoiceTableView(
+    testCase
+  );
+}
+
+function plannerRequestedInvoiceIdentity(
+  requestedText: string
+): string | null {
+  return String(requestedText || "").match(
+    /\bINV-[A-Z0-9-]+\b/i
+  )?.[0] ?? null;
+}
+
+export async function prepareRuntimeInvoiceFixture(
+  page: Page,
+  testCase: any,
+  requestedText: string,
+  options: {
+    executionPersona?: string | null;
+    now?: () => Date;
+  } = {}
+): Promise<PreparedRuntimeInvoiceFixture> {
+  const requiredState =
+    runtimeInvoiceStateFromCase(testCase);
+  const preparedAt = (
+    options.now?.() ?? new Date()
+  ).toISOString();
+  const evidenceRef =
+    `runtime-fixture-preparation:${String(
+      testCase?.id || "unknown-case"
+    )}`;
+  const selectedTableView =
+    requiredState
+      ? await trySelectInvoiceStateView(
+          page,
+          "any",
+          requiredState
+        )
+      : null;
+  const stateVerified =
+    requiredState !== null &&
+    selectedTableView !== null &&
+    await verifyInvoiceStateViewActive(
+      page,
+      requiredState
+    );
+  let rows: VisibleInvoiceRow[] = [];
+
+  if (stateVerified) {
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      rows = await collectVisibleInvoiceRows(page);
+
+      if (rows.length > 0 || attempt === 8) {
+        break;
+      }
+
+      await page.waitForTimeout(700);
+    }
+  }
+
+  const result =
+    evaluateRuntimeInvoiceFixturePreparation({
+      testCase,
+      actualPersona:
+        options.executionPersona,
+      requiredState,
+      stateVerified,
+      candidates: requiredState
+        ? rows.map((row) => ({
+            identityRef:
+              row.invoiceNumber,
+            verifiedState:
+              requiredState,
+          }))
+        : [],
+      requestedIdentity:
+        plannerRequestedInvoiceIdentity(
+          requestedText
+        ),
+      preparedAt,
+      evidenceRef,
+    });
+
+  testCase.runtimeFixturePreparationResult =
+    result;
+
+  const candidate =
+    runtimeFixturePreparationAllowsInteraction(
+      result
+    )
+      ? rows.find(
+          (row) =>
+            row.invoiceNumber ===
+            result.selectedIdentity
+        ) ?? null
+      : null;
+
+  return {
+    result,
+    candidate,
+    selectedTableView,
+  };
+}
+
 async function clickInvoiceCandidate(
   page: Page,
   candidate: VisibleInvoiceRow
@@ -965,8 +1235,136 @@ if (
 export async function resolveAndOpenInvoiceRow(
   page: Page,
   testCase: any,
-  requestedText: string
+  requestedText: string,
+  options: {
+    executionPersona?: string | null;
+    now?: () => Date;
+  } = {}
 ): Promise<InvoiceInteractionResult> {
+
+  if (
+    requiresRuntimeInvoiceFixturePreparation(
+      testCase
+    )
+  ) {
+    const preparation =
+      await prepareRuntimeInvoiceFixture(
+        page,
+        testCase,
+        requestedText,
+        options
+      );
+
+    if (
+      !runtimeFixturePreparationAllowsInteraction(
+        preparation.result
+      ) ||
+      !preparation.candidate
+    ) {
+      return {
+        status: "TEST_DATA_ISSUE",
+        note: preparation.result.note,
+        runtimeFixturePreparation:
+          preparation.result,
+      };
+    }
+
+    const opened = await clickInvoiceCandidate(
+      page,
+      preparation.candidate
+    );
+
+    if (!opened) {
+      return {
+        status: "AUTOMATION_LIMITATION",
+        note:
+          `manual required: prepared runtime invoice ` +
+          `${preparation.result.selectedIdentity} could not be opened safely`,
+        runtimeFixturePreparation:
+          preparation.result,
+      };
+    }
+
+    const requestedInvoice =
+      plannerRequestedInvoiceIdentity(
+        requestedText
+      );
+    const handoffInvoice =
+      String(
+        testCase?.runtimeResourceContext
+          ?.invoiceNumber || ""
+      ).match(/\bINV-[A-Z0-9-]+\b/i)?.[0] ??
+      null;
+    const selectedInvoice =
+      preparation.result.selectedIdentity!;
+    const exactInvoiceMatched = Boolean(
+      requestedInvoice &&
+      selectedInvoice.toLowerCase() ===
+        requestedInvoice.toLowerCase()
+    );
+    const handoffInvoiceMatched = Boolean(
+      handoffInvoice &&
+      selectedInvoice.toLowerCase() ===
+        handoffInvoice.toLowerCase()
+    );
+
+    testCase.runtimeSelectedInvoice =
+      selectedInvoice;
+    testCase.runtimeInvoiceFixture = {
+      policy: "compatible-state",
+      requestedInvoice,
+      handoffInvoice,
+      selectedInvoice,
+      requiredTableView:
+        preparation.result.requiredState,
+      selectedTableView:
+        preparation.selectedTableView,
+      exactInvoiceMatched,
+      handoffInvoiceMatched,
+    };
+    testCase.runtimeEvidenceIdentity = {
+      checkpointAction: "clickText",
+      entityType: "invoice",
+      requestedIdentity:
+        requestedInvoice,
+      runtimeIdentity:
+        selectedInvoice,
+      handoffIdentity:
+        handoffInvoice,
+      substituted: Boolean(
+        requestedInvoice &&
+        !exactInvoiceMatched
+      ),
+      policy: "compatible-state",
+      selectionSource:
+        handoffInvoiceMatched
+          ? "api-handoff"
+          : exactInvoiceMatched
+            ? "planner"
+            : "runtime-discovery",
+    };
+
+    return {
+      status: "OPENED",
+      selectedInvoice,
+      requestedInvoice,
+      handoffInvoice,
+      requiredTableView:
+        preparation.result.requiredState,
+      selectedTableView:
+        preparation.selectedTableView,
+      exactInvoiceMatched,
+      handoffInvoiceMatched,
+      runtimeFixturePolicy:
+        "compatible-state",
+      note:
+        `${preparation.result.note}; ` +
+        `invoice drawer opened; ` +
+        `fixture readiness is runtime-only and does not imply proof or PASS`,
+      runtimeFixturePreparation:
+        preparation.result,
+    };
+  }
 
     const preRequiredTableView =
     inferRequiredInvoiceTableView(

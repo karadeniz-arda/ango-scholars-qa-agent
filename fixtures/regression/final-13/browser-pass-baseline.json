@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "sourceRunDir": "qa-results/runs/final-13-regression-20260817-234932",
+  "executionProfile": {
+    "schemaVersion": 1,
+    "canonicalPlanManifestSha256": {
+      "value": "a235e9de397e2e378c3157fb99b83786b5c72af6a94db3f1e8b4ea66a4346370",
+      "resolution": "verified_from_archived_plan_parity"
+    },
+    "evidenceReview": {
+      "value": true,
+      "resolution": "verified_from_runtime_logs"
+    },
+    "browserMutationsAllowed": {
+      "value": true,
+      "resolution": "inferred_from_executed_behavior",
+      "evidence": [
+        "AS-1139/web-1 draft create + exact cleanup + PASS",
+        "AS-1139/web-2 draft create + exact cleanup + PASS"
+      ]
+    },
+    "browserEditFlowsAllowed": {
+      "value": null,
+      "resolution": "unknown"
+    },
+    "fixtureProvisioningPolicy": {
+      "value": null,
+      "resolution": "unknown"
+    },
+    "genericBrowserShadow": {
+      "value": true,
+      "resolution": "verified_from_runtime_logs"
+    },
+    "genericBrowserReadOnlyExecution": {
+      "value": true,
+      "resolution": "verified_from_runtime_logs"
+    },
+    "genericBrowserModel": {
+      "value": null,
+      "resolution": "unknown"
+    }
+  },
+  "browserPassCases": [
+    {
+      "issue": "AS-1014",
+      "caseId": "web-1",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1014",
+      "caseId": "web-2",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1190",
+      "caseId": "web-2",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1139",
+      "caseId": "web-1",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [
+          "browserMutationsAllowed"
+        ],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1139",
+      "caseId": "web-2",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [
+          "browserMutationsAllowed"
+        ],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1165",
+      "caseId": "web-1",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [
+          "genericBrowserHandoffProfile"
+        ],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1058",
+      "caseId": "web-1",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [
+          "genericBrowserHandoffProfile"
+        ],
+        "resolution": "verified_from_historical_execution"
+      }
+    },
+    {
+      "issue": "AS-1058",
+      "caseId": "web-2",
+      "comparisonDependencies": {
+        "requiredProfileDimensions": [
+          "genericBrowserHandoffProfile"
+        ],
+        "resolution": "verified_from_historical_execution"
+      }
+    }
+  ],
+  "browserCaseStatuses": [
+    {
+      "issue": "AS-1028",
+      "caseId": "web-1",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1014",
+      "caseId": "web-1",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1014",
+      "caseId": "web-2",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1093",
+      "caseId": "web-1",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1093",
+      "caseId": "web-2",
+      "status": "FAIL"
+    },
+    {
+      "issue": "AS-1093",
+      "caseId": "web-3",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1190",
+      "caseId": "web-1",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1190",
+      "caseId": "web-2",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1011",
+      "caseId": "web-1",
+      "status": "FAIL"
+    },
+    {
+      "issue": "AS-1154",
+      "caseId": "web-1",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1154",
+      "caseId": "web-2",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-869",
+      "caseId": "web-1",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1196",
+      "caseId": "web-1",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1196",
+      "caseId": "web-2",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1196",
+      "caseId": "web-3",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1073",
+      "caseId": "web-1",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1139",
+      "caseId": "web-1",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1139",
+      "caseId": "web-2",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1133",
+      "caseId": "web-1",
+      "status": "MANUAL_REQUIRED"
+    },
+    {
+      "issue": "AS-1165",
+      "caseId": "web-1",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1165",
+      "caseId": "web-2",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1165",
+      "caseId": "web-4",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1165",
+      "caseId": "web-3",
+      "status": "BLOCKED"
+    },
+    {
+      "issue": "AS-1058",
+      "caseId": "web-2",
+      "status": "PASS"
+    },
+    {
+      "issue": "AS-1058",
+      "caseId": "web-1",
+      "status": "PASS"
+    }
+  ]
+}

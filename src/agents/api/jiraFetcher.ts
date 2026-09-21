@@ -1,4 +1,10 @@
 import dotenv from 'dotenv';
+
+import {
+    collectAcceptanceCriteriaSources,
+    findAcceptanceCriteriaFields,
+    type JiraAcceptanceCriteriaDiscovery,
+} from './jira-acceptance-criteria.js';
 dotenv.config();
 
 export async function getJiraIssue(issueId: string) {
@@ -36,12 +42,126 @@ export async function getJiraIssue(issueId: string) {
         }
 
         const data = await response.json();
+
+        /*
+         * JIRA_ACCEPTANCE_SOURCE_INGESTION_V1
+         *
+         * Jira custom-field IDs are instance-specific.
+         * Discover Acceptance Criteria fields from Jira field
+         * metadata and explicitly request their issue values.
+         *
+         * Discovery failure is not equivalent to confirmed
+         * empty acceptance criteria. Preserve UNAVAILABLE so
+         * downstream PASS eligibility can fail safe.
+         */
+        let acceptanceCriteriaDiscovery:
+            JiraAcceptanceCriteriaDiscovery = {
+                status: "UNAVAILABLE",
+                candidateFieldCount: 0,
+                sources: [],
+            };
+
+        try {
+            const fieldsResponse = await fetch(
+                `${baseUrl}/rest/api/3/field`,
+                {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Basic ${authString}`,
+                        'Accept': 'application/json'
+                    }
+                }
+            );
+
+            if (!fieldsResponse.ok) {
+                throw new Error(
+                    `Jira field metadata error: ` +
+                    `${fieldsResponse.status} ` +
+                    `${fieldsResponse.statusText}`
+                );
+            }
+
+            const fields =
+                await fieldsResponse.json();
+
+            const candidateFields =
+                findAcceptanceCriteriaFields(
+                    fields
+                );
+
+            const candidateIds =
+                candidateFields
+                    .map((field) =>
+                        String(
+                            field?.id ?? ""
+                        ).trim()
+                    )
+                    .filter(Boolean);
+
+            let acceptanceIssueFields:
+                Record<string, unknown> = {};
+
+            if (candidateIds.length > 0) {
+                const acceptanceFieldsResponse =
+                    await fetch(
+                        `${baseUrl}/rest/api/3/issue/${issueId}` +
+                        `?fields=${encodeURIComponent(
+                            candidateIds.join(",")
+                        )}`,
+                        {
+                            method: 'GET',
+                            headers: {
+                                'Authorization':
+                                    `Basic ${authString}`,
+                                'Accept':
+                                    'application/json'
+                            }
+                        }
+                    );
+
+                if (!acceptanceFieldsResponse.ok) {
+                    throw new Error(
+                        `Jira acceptance field read error: ` +
+                        `${acceptanceFieldsResponse.status} ` +
+                        `${acceptanceFieldsResponse.statusText}`
+                    );
+                }
+
+                const acceptanceIssue =
+                    await acceptanceFieldsResponse.json();
+
+                acceptanceIssueFields =
+                    acceptanceIssue?.fields ?? {};
+            }
+
+            const discovered =
+                collectAcceptanceCriteriaSources(
+                    fields,
+                    acceptanceIssueFields
+                );
+
+            acceptanceCriteriaDiscovery = {
+                status: "RESOLVED",
+                candidateFieldCount:
+                    discovered.candidateFieldCount,
+                sources:
+                    discovered.sources,
+            };
+        } catch (error) {
+            console.warn(
+                "Jira acceptance criteria field discovery unavailable:",
+                error instanceof Error
+                    ? error.message
+                    : "unknown error"
+            );
+        }
         
         const issueDetails = {
             key: data.key,
             summary: data.fields.summary, 
             description: data.fields.description, 
-            status: data.fields.status.name
+            status: data.fields.status.name,
+            acceptanceCriteriaDiscovery
         };
 
         return issueDetails;

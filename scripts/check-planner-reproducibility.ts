@@ -279,10 +279,22 @@ function validatePlan(
         );
       }
 
-      if (
-        typeof testCase.expect?.status !==
-        "number"
-      ) {
+      const expectedStatus =
+        testCase.expect?.status;
+
+      const hasValidExpectedStatus =
+        (
+          typeof expectedStatus ===
+            "number" &&
+          Number.isInteger(
+            expectedStatus
+          ) &&
+          expectedStatus >= 100 &&
+          expectedStatus <= 599
+        ) ||
+        expectedStatus === "UNKNOWN";
+
+      if (!hasValidExpectedStatus) {
         errors.push(
           `${location}: invalid expect.status`
         );

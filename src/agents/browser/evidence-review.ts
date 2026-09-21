@@ -50,12 +50,44 @@ export type BrowserEvidenceCheckpoint = {
  */
 export type BrowserDeterministicEvidence = {
   stepIndex: number;
+
+  /*
+   * Stable canonical assertion identity.
+   *
+   * Optional because fixture and runtime-only evidence
+   * does not necessarily originate from a canonical
+   * planner assertion.
+   */
+  oracleId?: string;
+
+  /*
+   * Explicit assertion verdict criticality.
+   *
+   * Undefined remains fail-safe: later verdict logic
+   * must treat missing metadata as acceptance-critical.
+   */
+  acceptanceCritical?: boolean;
+  verificationMode?:
+    | "url"
+    | "visible-state";
+  targetSelectedLabel?: string;
+  observedSelectedLabel?:
+    | string
+    | null;
   action:
     | "assertUrlContains"
     | "assertUrlNotContains"
     | "assertTextVisible"
+    /** Source-derived structural carrier; never produced by page-wide text. */
+    | "assertExactVisibleButton"
+    | "assertSurfaceControls"
     | "assertTextNotVisible"
+    | "assertCollectionFilter"
     | "openRuntimeControl"
+    | "selectRuntimeFilterOption"
+    | "selectOption"
+    | "provisionBrowserFixture"
+    | "cleanupBrowserFixture"
     | "resolveRuntimeInvoiceFixture"
     | "cleanupExactCreatedJob";
   expected: string;
@@ -270,12 +302,12 @@ INCONCLUSIVE:
 The screenshot alone does not contain enough evidence to classify safely.
 
 Rules:
-- Evaluate PASS_CONFIRMED and PRODUCT_BUG only against automatedChecks. If automatedChecks is empty, use successCriteria as the legacy fallback.
-- manualChecks are outside the automated verdict scope. A non-empty manualChecks list must not downgrade an otherwise fully proven automated result.
+- Evaluate PASS_CONFIRMED and PRODUCT_BUG only against automatedChecks. If automatedChecks is empty, use successCriteria as the legacy fallback. PASS_CONFIRMED describes the reviewed automated evidence only; it does not by itself establish whole-case PASS eligibility.
+- manualChecks are unresolved acceptance coverage outside screenshot-review proof. Do not treat screenshot evidence as satisfying them. The deterministic runtime acceptance-completeness gate handles their effect on the final case status.
 - fixtureRequirements are execution prerequisites, not product assertions.
 - When screenshot evidence directly shows that a fixture requirement is missing, empty, unsuitable or incompatible, return TEST_DATA_ISSUE.
 - When fixture satisfaction is not visible or deterministically established, do not assume it was satisfied. Return INCONCLUSIVE instead of PRODUCT_BUG.
-- Do not return AUTOMATION_LIMITATION or INCONCLUSIVE solely because manualChecks remain unverified.
+- Do not return AUTOMATION_LIMITATION or INCONCLUSIVE solely because manualChecks remain unverified; their completeness effect is handled independently by the deterministic runtime gate.
 - Be conservative.
 - Runner notes saying PASS are not proof by themselves.
 - Checkpoint screenshots are visual evidence; their labels only describe when they were captured and are not proof on their own.
@@ -284,6 +316,9 @@ Rules:
 - The currentUrl field alone is context, not proof.
 - assertUrlContains and assertUrlNotContains deterministicEvidence entries are direct Playwright URL assertions. Treat them as authoritative only for their exact URL claim.
 - assertTextVisible and assertTextNotVisible deterministicEvidence entries are direct Playwright visibility assertions. Treat them as authoritative only for the exact text-presence or text-absence claim recorded in that entry.
+- assertSurfaceControls deterministicEvidence proves only that one unique observed semantic surface of the requested kind contained exactly one observed control for every requested exact {kind,label} expectation. Same-label controls outside that surface are irrelevant; duplicate or missing controls inside the surface fail the assertion.
+- assertCollectionFilter deterministicEvidence is a deterministic grounded-collection membership oracle. Treat it as authoritative only for its recorded query, field scope, predicate, and bounded post-search membership claim. It does not prove unrelated acceptance obligations or unseen-page completeness.
+- Surface-control machine evidence does not prove backend ordering, request parameters, persistence, permissions, or that selecting those controls produces correct behavior.
 - Text visibility machine evidence does not prove route correctness, record identity, table state, permissions, backend contents or that an unopened drawer contains the text.
 - Text visibility evidence may support PASS only when screenshot evidence shows the correct feature area and the required drawer, modal, panel or detail surface is visibly open.
 - resolveRuntimeInvoiceFixture deterministicEvidence proves only the recorded runtime invoice selection and required table-view selection performed by the specialized resolver.
@@ -296,6 +331,7 @@ Rules:
 - A failed deterministic URL assertion must not be dismissed merely because the browser address bar is absent from the screenshot.
 - A closed final menu does not invalidate an earlier checkpoint that visibly proves the menu opened and displayed the required options.
 - Distinct checkpoints may prove successive option selections when each selected value is visibly shown.
+- A selectOption deterministic entry proves only that one unique observed option was clicked and a visible or semantic selected-state signal was verified. The corresponding checkpoint must visibly support the selected value before using it for PASS_CONFIRMED.
 - A selectRuntimeTopTab checkpoint may prove that a visible inactive main-content tab became selected only when the selected state is visually apparent in that checkpoint.
 - When a later reload checkpoint is provided, compare the visible selected tab before and after reload before claiming visual tab restoration.
 - The runtime-selected tab label in runner notes is context only; the screenshot must visibly support the selected state.

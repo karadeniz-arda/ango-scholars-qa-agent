@@ -1,10 +1,24 @@
 import fs from "node:fs";
-import type { TestPlan } from "../planner/types.js";
+import type {
+  BrowserTestCase,
+  TestPlan,
+} from "../planner/types.js";
+import {
+  getRemainingBrowserManualAcceptanceChecks,
+} from "../agents/browser/browser-result-reconciliation.js";
 import { buildPolishedReportSections } from "./failure-learning.js";
+import type {
+  BrowserRuntimeFixturePreparationResult,
+} from "../agents/browser/browser-runtime-fixture-preparation.js";
+
 import {
   buildProductFindings,
   formatProductFindingsMarkdown,
 } from "./product-findings.js";
+import {
+  renderReviewerBrowserQaSection,
+  type ReviewerBrowserResultInput,
+} from "./reviewer-browser-case-summary.js";
 
 type EvidenceReviewResult = {
   verdict: string;
@@ -55,22 +69,12 @@ type BrowserDeterministicEvidence = {
   note: string;
 };
 
-type TestResult = {
-  id: string;
+type TestResult = ReviewerBrowserResultInput & {
   status: string;
-  reasonCategory?: string;
   notes?: string;
-  evidence?: string;
-  startRoute?: string;
-  videoPath?: string;
-  checkpointEvidence?:
-    BrowserEvidenceCheckpoint[];
-  deterministicEvidence?:
-    BrowserDeterministicEvidence[];
-  evidenceReview?: EvidenceReviewResult | null;
-  videoEvidenceReview?:
-    | VideoEvidenceReviewResult
-    | null;
+  runtimeFixturePreparations?:
+    BrowserRuntimeFixturePreparationResult[];
+  operationalExecution?: { kind: "DISCOVERY_ONLY_SUPPORT" };
 };
 
 type WriteReportInput = {
@@ -181,6 +185,9 @@ function renderBrowserEvidenceDetails(
         ) ||
         Boolean(
           result.deterministicEvidence?.length
+        ) ||
+        Boolean(
+          result.runtimeFixturePreparations?.length
         )
     );
 
@@ -205,6 +212,13 @@ No non-pass browser cases for this run.
             result.reasonCategory
         );
       }
+
+      if (result.terminationReason) {
+  lines.push(
+    `- **Termination Reason:** ` +
+      result.terminationReason
+  );
+}
 
       if (result.startRoute) {
         lines.push(
@@ -291,6 +305,33 @@ No non-pass browser cases for this run.
                       : "FAIL"
                   } ` +
                   `(actual: ${item.actualUrl})`
+              )
+              .join("; ")
+        );
+      }
+
+      if (
+        result.runtimeFixturePreparations &&
+        result.runtimeFixturePreparations.length > 0
+      ) {
+        lines.push(
+          `- **Runtime Fixture Preparation:** ` +
+            result.runtimeFixturePreparations
+              .map(
+                (item) =>
+                  `case=${item.caseId}, ` +
+                  `status=${item.status}, ` +
+                  `candidates=${item.candidateCount}, ` +
+                  `selected=${item.selectedIdentity ?? "none"}, ` +
+                  `requiredState=${item.requiredState ?? "none"}, ` +
+                  `verifiedState=${item.verifiedState ?? "none"}, ` +
+                  `persona=${item.persona ?? "none"}, ` +
+                  `resolver=${item.resolver}, ` +
+                  `binding=${item.binding ? "present" : "absent"}, ` +
+                  `fixtureReadyForInteraction=${item.fixtureReadyForInteraction}, ` +
+                  `failure=${item.failureReason ?? "none"}, ` +
+                  `preparedAt=${item.preparedAt}, ` +
+                  `evidenceRef=${item.evidenceRef ?? "none"}`
               )
               .join("; ")
         );
@@ -502,6 +543,87 @@ ${tableRows}
 `;
 }
 
+export function renderBrowserCoverageScope(
+  testCase:
+    | Partial<BrowserTestCase>
+    | undefined,
+  result?: {
+    collectionFilterEvidence?: unknown[];
+    deterministicObligationDischarges?: unknown[];
+    caseProofReadiness?: unknown;
+    reconciliationAudit?:
+      Record<string, unknown>[];
+  }
+): string {
+  const automatedChecks =
+    Array.isArray(testCase?.automatedChecks)
+      ? testCase.automatedChecks
+      : [];
+
+  const manualChecks =
+    Array.isArray(testCase?.manualChecks)
+      ? testCase.manualChecks
+      : [];
+
+  const hasAcceptanceCoverageReconciliation =
+    Array.isArray(
+      result?.reconciliationAudit
+    ) &&
+    result.reconciliationAudit.some(
+      (entry) =>
+        Object.prototype.hasOwnProperty.call(
+          entry,
+          "legacyAcceptanceCoverageGapDetected"
+        )
+    );
+
+  const remainingManualChecks =
+    hasAcceptanceCoverageReconciliation
+      ? getRemainingBrowserManualAcceptanceChecks(
+          testCase,
+          result
+        )
+      : manualChecks;
+
+  const acceptanceScope =
+    testCase?.acceptanceScope;
+
+  let behaviorProofSummary: string;
+
+  if (!acceptanceScope) {
+    behaviorProofSummary =
+      "scope unavailable";
+  } else if (
+    acceptanceScope.requiresBehaviorProof
+  ) {
+    const behaviorClaimCount =
+      Array.isArray(
+        acceptanceScope.behaviorClaims
+      )
+        ? acceptanceScope.behaviorClaims
+            .length
+        : 0;
+
+    behaviorProofSummary =
+      `required (${behaviorClaimCount} ` +
+      `${
+        behaviorClaimCount === 1
+          ? "claim"
+          : "claims"
+      }; satisfaction not structurally evaluated)`;
+  } else {
+    behaviorProofSummary =
+      "none required";
+  }
+
+  return (
+    `Automated checks: ${automatedChecks.length}; ` +
+    `Manual planned: ${manualChecks.length}; ` +
+    `Manual remaining: ${remainingManualChecks.length}; ` +
+    `Behavior proof: ${behaviorProofSummary}`
+  );
+}
+
 function renderBrowserTable(plan: any, browserResults: TestResult[] = []) {
   if (browserResults.length === 0) {
     return `## Browser Results\n\nNo browser results for this run.\n`;
@@ -526,6 +648,10 @@ function renderBrowserTable(plan: any, browserResults: TestResult[] = []) {
       renderCompactBrowserEvidence(
         result
       ),
+      renderBrowserCoverageScope(
+        testCase,
+        result
+      ),
       testCase?.goal ?? "",
     ];
   });
@@ -541,10 +667,26 @@ function renderBrowserTable(plan: any, browserResults: TestResult[] = []) {
 
   return `## Browser Results
 
-| Case ID | Persona | Start Route | Result | Reason Category | Evidence Summary | Goal |
-| --- | --- | --- | --- | --- | --- | --- |
+| Case ID | Persona | Start Route | Result | Reason Category | Evidence Summary | Coverage Scope | Goal |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 ${tableRows}
 `;
+}
+
+function renderHumanReadableBrowserResults(browserResults: TestResult[] = []): string {
+  const rendered = browserResults
+    .filter((result) => Boolean(result.humanReadableResult))
+    .map((result) => {
+      const readable = result.humanReadableResult!;
+      const action = readable.humanAction
+        ? `\n**What to do:** ${readable.humanAction.instruction}` +
+          (readable.humanAction.requiredInputs?.length
+            ? `\n${readable.humanAction.requiredInputs.map((item) => `- ${item.key}: ${item.description}`).join("\n")}`
+            : "")
+        : "";
+      return `### ${readable.status} — ${result.id}\n\n${readable.summary}\n\n**What happened:** ${readable.accomplished.length ? readable.accomplished.join(" ") : "No additional completed runtime fact was recorded."}\n\n**Why:** ${readable.reason.explanation}${action}\n\n**Technical:** ${readable.technical.reasonCode ?? "not recorded"}`;
+    });
+  return rendered.length ? `## QA-Readable Case Results\n\n${rendered.join("\n\n")}` : "";
 }
 
 function renderObservations(apiResults: TestResult[] = [], browserResults: TestResult[] = []) {
@@ -589,9 +731,12 @@ export function writeReport({
     browserResults,
   });
 
-const productFindingsMarkdown =
+  const productFindingsMarkdown =
   formatProductFindingsMarkdown(
     productFindings
+  );
+  const canonicalBrowserResults = browserResults.filter(
+    (result) => !result.operationalExecution
   );
   const report = `# QA Agent Report
 
@@ -609,7 +754,7 @@ ${(plan as any).notes ?? "No plan-level notes."}
 ${buildPolishedReportSections({
   issueKey: issueId,
   apiResults,
-  browserResults,
+  browserResults: canonicalBrowserResults,
 })}
 ${productFindingsMarkdown}
 
@@ -617,7 +762,16 @@ ${productFindingsMarkdown}
 
 ${renderStatusSummary("API Summary", apiResults)}
 
-${renderStatusSummary("Browser Summary", browserResults)}
+${renderStatusSummary("Browser Summary", canonicalBrowserResults)}
+
+${renderStatusSummary("Operational Discovery Support", browserResults.filter((result) => Boolean(result.operationalExecution)))}
+
+${renderReviewerBrowserQaSection({
+  plan,
+  browserResults,
+})}
+
+${renderHumanReadableBrowserResults(browserResults)}
 
 ${renderResultSemantics()}
 

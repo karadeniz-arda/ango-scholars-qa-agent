@@ -15,6 +15,7 @@ export type RuntimeResourceContext = {
   invoiceNumber?: string | undefined;
   invoiceStatus?: string | undefined;
   skillIds?: string[] | undefined;
+  skillLabels?: string[] | undefined;
   skillCategory?: string | undefined;
   mainDiscipline?: string | undefined;
   jobs?: any[] | undefined;
