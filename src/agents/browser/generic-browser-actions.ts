@@ -10,7 +10,10 @@ function escapeRegExp(value: string): string {
 }
 
 function textRegex(text: string): RegExp {
-  return new RegExp(escapeRegExp(text.trim()).replaceAll("\\ ", "\\s+"), "i");
+  return new RegExp(
+    `^\\s*${escapeRegExp(text.trim()).replaceAll("\\ ", "\\s+")}\\s*$`,
+    "i"
+  );
 }
 
 function buttonTextCandidates(text: string): string[] {
@@ -49,31 +52,41 @@ function buttonTextCandidates(text: string): string[] {
   return [...candidates];
 }
 
-async function clickFirstVisible(locator: Locator, label: string): Promise<GenericActionResult> {
+async function clickUniqueVisible(locator: Locator, label: string): Promise<GenericActionResult> {
   const count = await locator.count().catch(() => 0);
+  const visible: Locator[] = [];
 
   for (let index = 0; index < Math.min(count, 5); index += 1) {
     const item = locator.nth(index);
 
-    const visible = await item.isVisible().catch(() => false);
-    if (!visible) continue;
-
-    try {
-      await item.scrollIntoViewIfNeeded({ timeout: 1000 });
-      await item.click({ timeout: 1500 });
-      return {
-        ok: true,
-        note: `clicked ${label}`,
-      };
-    } catch {
-      // try next candidate
-    }
+    const isVisible = await item.isVisible().catch(() => false);
+    const isEnabled = await item.isEnabled().catch(() => false);
+    if (isVisible && isEnabled) visible.push(item);
   }
 
-  return {
-    ok: false,
-    note: `${label} not visible or not safely clickable`,
-  };
+  if (visible.length !== 1 || !visible[0]) {
+    return {
+      ok: false,
+      note:
+        visible.length > 1
+          ? `${label} was ambiguous (${visible.length} visible enabled matches); no DOM-order fallback was used`
+          : `${label} not visible or not safely clickable`,
+    };
+  }
+
+  try {
+    await visible[0].scrollIntoViewIfNeeded({ timeout: 1000 });
+    await visible[0].click({ timeout: 1500 });
+    return {
+      ok: true,
+      note: `clicked unique observed ${label}`,
+    };
+  } catch {
+    return {
+      ok: false,
+      note: `${label} was uniquely observed but not safely clickable`,
+    };
+  }
 }
 
 export async function clickSmartButton(
@@ -85,21 +98,21 @@ export async function clickSmartButton(
   for (const candidate of candidates) {
     const regex = textRegex(candidate);
 
-    const byButton = await clickFirstVisible(
+    const byButton = await clickUniqueVisible(
       page.getByRole("button", { name: regex }),
       `button "${candidate}"`
     );
 
     if (byButton.ok) return byButton;
 
-    const byLink = await clickFirstVisible(
+    const byLink = await clickUniqueVisible(
       page.getByRole("link", { name: regex }),
       `link "${candidate}"`
     );
 
     if (byLink.ok) return byLink;
 
-    const byAria = await clickFirstVisible(
+    const byAria = await clickUniqueVisible(
       page.locator(`[aria-label*="${candidate}" i]`),
       `aria-label "${candidate}"`
     );
@@ -141,7 +154,7 @@ export async function clickSmartText(
   ];
 
   for (const locator of contentLocators) {
-    const result = await clickFirstVisible(
+    const result = await clickUniqueVisible(
       locator,
       `content text "${text}"`
     );
@@ -177,7 +190,7 @@ export async function clickSmartText(
   ];
 
   for (const locator of globalLocators) {
-    const result = await clickFirstVisible(
+    const result = await clickUniqueVisible(
       locator,
       `global text "${text}"`
     );
@@ -204,7 +217,7 @@ export async function openLikelyPanelOrItem(page: Page): Promise<GenericActionRe
   ];
 
   for (const locator of candidateLocators) {
-    const result = await clickFirstVisible(locator, "likely panel/item trigger");
+    const result = await clickUniqueVisible(locator, "likely panel/item trigger");
     if (result.ok) return result;
   }
 
@@ -1004,10 +1017,45 @@ export async function openMatchingTableRowDetail(
   candidates.sort(
     (left, right) =>
       right.score - left.score ||
-      left.rowIndex - right.rowIndex
+      normalizeRowDetailValue(
+        left.rowText
+      ).localeCompare(
+        normalizeRowDetailValue(
+          right.rowText
+        )
+      ) ||
+      left.descriptor.localeCompare(
+        right.descriptor
+      )
   );
 
   const candidate = candidates[0]!;
+
+  const equallyGrounded =
+    candidates.filter(
+      (item) =>
+        item.score ===
+          candidate.score &&
+        normalizeRowDetailValue(
+          item.rowText
+        ) ===
+          normalizeRowDetailValue(
+            candidate.rowText
+          ) &&
+        item.descriptor ===
+          candidate.descriptor
+    );
+
+  if (equallyGrounded.length > 1) {
+    return {
+      ok: false,
+      note:
+        `matching table-row detail controls ` +
+        `for "${requestedText}" were ` +
+        `semantically ambiguous; no DOM-order ` +
+        `fallback was used`,
+    };
+  }
 
   const surfacesBefore =
     await captureVisibleDetailSurfaces(
@@ -1128,6 +1176,8 @@ export type ScrollAwareTextVisibilityResult = {
   visible: boolean;
   attempted: boolean;
   scrolled: boolean;
+  /** Number of visible modal-like surfaces considered by the observation. */
+  surfaceCount: number;
   note: string;
 };
 
@@ -1145,6 +1195,7 @@ export async function findTextInOpenDetailSurface(
       visible: false,
       attempted: false,
       scrolled: false,
+      surfaceCount: 0,
       note:
         "scroll-aware detail assertion skipped: " +
         "requested text is empty",
@@ -1576,6 +1627,7 @@ export async function findTextInOpenDetailSurface(
             scrolled: false,
             surface: "",
             positionsChecked: 0,
+            surfaceCount: 0,
           };
         }
 
@@ -1629,6 +1681,7 @@ export async function findTextInOpenDetailSurface(
               surface:
                 describeSurface(surface),
               positionsChecked,
+              surfaceCount: surfaces.length,
             };
           }
 
@@ -1806,6 +1859,7 @@ export async function findTextInOpenDetailSurface(
                       surface
                     ),
                   positionsChecked,
+                  surfaceCount: surfaces.length,
                 };
               }
             }
@@ -1847,6 +1901,7 @@ export async function findTextInOpenDetailSurface(
                 )
               : "",
           positionsChecked,
+          surfaceCount: surfaces.length,
         };
       },
       {
@@ -1859,6 +1914,7 @@ export async function findTextInOpenDetailSurface(
       scrolled: false,
       surface: "",
       positionsChecked: 0,
+      surfaceCount: 0,
       runtimeError:
         error instanceof Error
           ? error.message
@@ -1870,6 +1926,7 @@ export async function findTextInOpenDetailSurface(
       visible: false,
       attempted: false,
       scrolled: false,
+      surfaceCount: result.surfaceCount,
       note:
         `scroll-aware detail assertion ` +
         `was not applicable for ` +
@@ -1887,6 +1944,7 @@ export async function findTextInOpenDetailSurface(
       visible: false,
       attempted: true,
       scrolled: false,
+      surfaceCount: result.surfaceCount,
       note:
         runtimeError
           ? `scroll-aware detail assertion ` +
@@ -1905,6 +1963,7 @@ export async function findTextInOpenDetailSurface(
     visible: true,
     attempted: true,
     scrolled: result.scrolled,
+    surfaceCount: result.surfaceCount,
     note:
       `scroll-aware detail assertion found ` +
       `visible text "${requested}" inside ` +

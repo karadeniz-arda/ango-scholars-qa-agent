@@ -11,6 +11,7 @@ export type RuntimeTalentContractFixture = {
     DesiredTalentContractFixture;
   matchedState: boolean;
   jobId?: string;
+  executionContextProvenance?: "HUMAN_CONFIRMED_EXECUTION_CONTEXT";
 };
 
 const desiredFixtures =
@@ -98,8 +99,9 @@ export function getRuntimeTalentContractFixture(
         ? {
             jobId,
           }
-        : {}
+      : {}
     ),
+    ...(raw.executionContextProvenance === "HUMAN_CONFIRMED_EXECUTION_CONTEXT" ? { executionContextProvenance: "HUMAN_CONFIRMED_EXECUTION_CONTEXT" as const } : {}),
   };
 }
 
@@ -131,8 +133,9 @@ export function setRuntimeTalentContractFixture(
             jobId:
               fixture.jobId,
           }
-        : {}
+      : {}
     ),
+    ...(fixture.executionContextProvenance ? { executionContextProvenance: fixture.executionContextProvenance } : {}),
   };
 }
 

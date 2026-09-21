@@ -280,6 +280,21 @@ export function isAssessmentLanguageCase(
     .toLowerCase()
     .replace(/[-_]+/g, " ");
 
+  const isForeignComparisonContainer =
+    [
+      "job change request",
+      "change requests table",
+      "publish request",
+      "comparison view",
+      "current and proposed",
+    ].some((term) =>
+      caseText.includes(term)
+    );
+
+  if (isForeignComparisonContainer) {
+    return false;
+  }
+
   return (
     caseText.includes("assessment") &&
     [
@@ -471,6 +486,29 @@ export function ensureAssessmentLanguageEditorNavigationStep(
     step: any
   ): boolean => {
     if (
+      step?.action === "clickText"
+    ) {
+      return (
+        String(step?.text || "")
+          .trim()
+          .toLowerCase() ===
+        "language requirements"
+      );
+    }
+
+    if (
+      step?.action ===
+        "openRuntimeControl"
+    ) {
+      return (
+        String(step?.target || "")
+          .trim()
+          .toLowerCase() ===
+        "language requirements"
+      );
+    }
+
+    if (
       step?.action !== "clickButton"
     ) {
       return false;
@@ -492,6 +530,9 @@ export function ensureAssessmentLanguageEditorNavigationStep(
     {
       action: "clickButton",
       text: "Configure",
+      contextText:
+        "Language Requirements",
+      verifyExpandedSurface: true,
     },
     {
       action: "clickButton",

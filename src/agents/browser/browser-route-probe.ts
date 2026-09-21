@@ -1,4 +1,11 @@
 import type { Page } from "playwright";
+import {
+  verifyDeepRouteTarget,
+} from "./browser-deep-route-binding.js";
+import {
+  getRuntimeDeepRouteBinding,
+  setRuntimeDeepRouteBinding,
+} from "./browser-deep-route-binding-context.js";
 
 type ProbeArea =
   | "assessments"
@@ -19,6 +26,7 @@ export type BrowserRouteProbeAttempt = {
   accepted: boolean;
   reason: string;
   matchedLandmarks: string[];
+  deepRouteStatus?: string;
 };
 
 export type BrowserRouteProbeResult = {
@@ -593,6 +601,90 @@ async function probeSingleRoute(
       reason:
         "Candidate page has no usable application content.",
       matchedLandmarks: [],
+    };
+  }
+
+  const runtimeDeepRoute =
+    getRuntimeDeepRouteBinding(
+      testCase
+    );
+
+  if (
+    runtimeDeepRoute?.boundRoute &&
+    route ===
+      runtimeDeepRoute.boundRoute.route
+  ) {
+    const targetIdentity =
+      runtimeDeepRoute.boundRoute
+        .targetIdentity;
+    const exactIdentityVisible =
+      targetIdentity
+        ? await page
+            .locator(
+              "main, [role=\"main\"]"
+            )
+            .getByText(
+              targetIdentity.value,
+              { exact: true }
+            )
+            .evaluateAll((elements) =>
+              elements.some((element) => {
+                const style =
+                  window.getComputedStyle(
+                    element
+                  );
+                const rectangle =
+                  element.getBoundingClientRect();
+
+                return (
+                  style.display !== "none" &&
+                  style.visibility !==
+                    "hidden" &&
+                  rectangle.width > 0 &&
+                  rectangle.height > 0
+                );
+              })
+            )
+            .catch(() => false)
+        : false;
+    const targetResult =
+      verifyDeepRouteTarget(
+        runtimeDeepRoute.boundRoute,
+        {
+          finalUrl,
+          navigationSucceeded: true,
+          exactSurfaceIdentities:
+            exactIdentityVisible &&
+            targetIdentity
+              ? [targetIdentity]
+              : [],
+          notFoundOrError:
+            /\b(?:page not found|not found|something went wrong|no [^.]{0,80} details found)\b/i.test(
+              landmarkText
+            ),
+        }
+      );
+
+    setRuntimeDeepRouteBinding(
+      testCase,
+      {
+        status: targetResult.status,
+        reason: targetResult.reason,
+        boundRoute:
+          runtimeDeepRoute.boundRoute,
+      }
+    );
+
+    return {
+      route,
+      finalUrl,
+      accepted:
+        targetResult.status ===
+        "TARGET_VERIFIED",
+      reason: targetResult.reason,
+      matchedLandmarks: [],
+      deepRouteStatus:
+        targetResult.status,
     };
   }
 

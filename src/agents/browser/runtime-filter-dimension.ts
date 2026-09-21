@@ -176,14 +176,6 @@ async function scoreRuntimeFilterDimension(
           return null;
         }
 
-        const normalizeValue = (
-          value: unknown
-        ) =>
-          String(value ?? "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .toLowerCase();
-
         const label =
           String(
             element.getAttribute(
@@ -201,7 +193,10 @@ async function scoreRuntimeFilterDimension(
         }
 
         const normalizedLabel =
-          normalizeValue(label);
+          String(label ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
 
         const disabled =
           element.getAttribute(
@@ -238,7 +233,11 @@ async function scoreRuntimeFilterDimension(
         const tokens =
           Array.isArray(rawTokens)
             ? rawTokens.map(
-                normalizeValue
+                (value) =>
+                  String(value ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .toLowerCase()
               )
             : [];
 
@@ -324,18 +323,34 @@ async function findRuntimeFilterDimension(
     '[role="menu"] [role="menuitem"]',
     '[role="menu"] button',
     '[role="menu"] [role="button"]',
+    '[role="menu"] li',
+    '[role="menu"] [class*="menu-item"]',
+    '[role="menu"] [class*="submenu-title"]',
     '[data-state="open"] [role="menuitem"]',
     '[data-state="open"] button',
+    '[data-state="open"] li',
+    '[data-state="open"] [class*="menu-item"]',
+    '[data-state="open"] [class*="submenu-title"]',
     '[data-radix-menu-content] [role="menuitem"]',
     '[data-radix-menu-content] button',
+    '[data-radix-menu-content] li',
     '[data-radix-popper-content-wrapper] [role="menuitem"]',
     '[data-radix-popper-content-wrapper] button',
+    '[data-radix-popper-content-wrapper] li',
     '[class*="popover"] [role="menuitem"]',
     '[class*="popover"] button',
+    '[class*="popover"] li',
     '[class*="Popover"] [role="menuitem"]',
     '[class*="Popover"] button',
+    '[class*="Popover"] li',
     '[class*="dropdown"] [role="menuitem"]',
+    '[class*="dropdown"] li',
+    '[class*="dropdown"] [class*="menu-item"]',
+    '[class*="dropdown"] [class*="submenu-title"]',
     '[class*="Dropdown"] [role="menuitem"]',
+    '[class*="Dropdown"] li',
+    '[class*="Dropdown"] [class*="menu-item"]',
+    '[class*="Dropdown"] [class*="submenu-title"]',
   ].join(", ");
 
   const entries =
@@ -387,7 +402,15 @@ async function findRuntimeFilterDimension(
 
   candidates.sort(
     (left, right) =>
-      right.score - left.score
+      right.score - left.score ||
+      normalize(
+        left.label
+      ).localeCompare(
+        normalize(right.label)
+      ) ||
+      left.descriptor.localeCompare(
+        right.descriptor
+      )
   );
 
   const best = candidates[0];
@@ -400,9 +423,7 @@ async function findRuntimeFilterDimension(
   if (
     second &&
     best.score -
-      second.score < 12 &&
-    best.descriptor !==
-      second.descriptor
+      second.score < 12
   ) {
     return null;
   }
@@ -496,6 +517,34 @@ async function findRuntimeFilterDimensionByExactText(
         continue;
       }
 
+      const insideOpenSurface =
+        await textLocator
+          .locator(
+            [
+              "xpath=ancestor::*[",
+              '@role="menu" or ',
+              '@role="listbox" or ',
+              '@data-state="open" or ',
+              "@data-radix-menu-content or ",
+              "@data-radix-popper-content-wrapper or ",
+              'contains(@class,"popover") or ',
+              'contains(@class,"Popover") or ',
+              'contains(@class,"dropdown") or ',
+              'contains(@class,"Dropdown") or ',
+              'contains(@class,"drawer") or ',
+              'contains(@class,"Drawer") or ',
+              'contains(@class,"sheet") or ',
+              'contains(@class,"Sheet")',
+              "][1]",
+            ].join("")
+          )
+          .count()
+          .catch(() => 0);
+
+      if (insideOpenSurface === 0) {
+        continue;
+      }
+
       const label =
         String(
           await textLocator
@@ -527,10 +576,13 @@ async function findRuntimeFilterDimensionByExactText(
             "ancestor-or-self::*[",
             "self::button or ",
             "self::a or ",
+            "self::li or ",
             '@role="menuitem" or ',
             '@role="button" or ',
             "@aria-haspopup or ",
-            "@tabindex",
+            "@tabindex or ",
+            'contains(@class,"menu-item") or ',
+            'contains(@class,"submenu-title")',
             "][1]",
           ].join("")
         );

@@ -11,8 +11,12 @@ import {
   applyPlannerCaseLimits,
 } from "./planner-case-budget.js";
 import {
+  normalizePlannerApiStatusExpectations,
+} from "./planner-api-status-expectation.js";
+import {
   applyBrowserTextAssertionProvenanceGate,
   applyBrowserUrlAssertionPrerequisiteGate,
+  applySourceGroundedBrowserFilterCoverage,
   normalizePlannerBrowserScopes,
   normalizePlannerUrlSynchronizationSteps,
 } from "./planner-browser-policy.js";
@@ -24,7 +28,52 @@ import {
   splitCombinedInvoiceStateCases,
 } from "./planner-runtime-fixture-policy.js";
 import { getJiraIssue } from "../agents/api/jiraFetcher.js";
+import {
+  buildPlannerAcceptanceSourceLedger,
+  buildPlannerJiraSourceUnits,
+} from "./planner-acceptance-source-ledger.js";
+import {
+  auditPlannerAcceptanceCoverage,
+} from "./planner-acceptance-coverage-audit.js";
+import {
+  buildPlannerAcceptanceObligationLedger,
+} from "./planner-acceptance-obligation-ledger.js";
+import {
+  buildPlannerSourceDerivedObligationMemberLedger,
+} from "./planner-source-derived-obligation-members.js";
+import {
+  buildPlannerSemanticMemberCoverageAudit,
+} from "./planner-semantic-member-coverage.js";
 import { getGithubChangeContext } from "../agents/api/githubFetcher.js";
+import {
+  extractPlannerRouteEvidence,
+} from "./planner-route-evidence.js";
+import {
+  auditPlannerObligationCaseAllocation,
+} from "./planner-obligation-case-allocation-audit.js";
+import {
+  applySourceBackedBrowserObligationBridge,
+} from "./planner-browser-obligation-bridge.js";
+import {
+  buildPlannerAcceptanceVerdictGrouping,
+} from "./planner-acceptance-verdict-grouping.js";
+import {
+  buildPlannerBrowserSemanticIr,
+  verdictGroupCandidatesFromSemanticIr,
+} from "./planner-browser-semantic-ir.js";
+import {
+  applyPlannerBrowserSemanticAllocation,
+} from "./planner-browser-semantic-allocation.js";
+import {
+  compileSourceInvoiceExecutionCapabilities,
+} from "./planner-source-invoice-capability.js";
+import {
+  clonePlannerSemanticCandidateProposals,
+  materializePlannerBrowserCaseProposal,
+  normalizePlannerModelProposal,
+} from "./planner-model-proposal.js";
+import { finalizeCompiledTestPlanArtifact } from "./compiled-test-plan.js";
+import { formatCompiledPlanSummary, summarizeCompiledPlan } from "./planner-plan-summary.js";
 
 type ADFNode = {
   type?: string;
@@ -47,18 +96,89 @@ function adfToText(node: any): string {
   return children;
 }
 
-export async function readTicketFiles(ticketId: string) {
-  const jiraIssue = await getJiraIssue(ticketId);
-
-  if (!jiraIssue) {
-    throw new Error(`Could not fetch Jira issue: ${ticketId}`);
+function formatJiraAcceptanceCriteria(
+  discovery: any
+): string {
+  if (
+    discovery?.status !== "RESOLVED"
+  ) {
+    return [
+      "Discovery Status: UNAVAILABLE",
+      "Acceptance Criteria: (source availability unknown)",
+    ].join("\n");
   }
 
-  const descriptionText = adfToText(jiraIssue.description);
+  const sources =
+    Array.isArray(discovery?.sources)
+      ? discovery.sources
+      : [];
+
+  if (sources.length === 0) {
+    return [
+      "Discovery Status: RESOLVED",
+      "Acceptance Criteria: (none populated)",
+    ].join("\n");
+  }
+
+  return [
+    "Discovery Status: RESOLVED",
+    "Acceptance Criteria:",
+    ...sources.map(
+      (source: any) =>
+        `- [${String(source?.fieldName ?? "").trim()} | ` +
+        `${String(source?.fieldId ?? "").trim()}] ` +
+        `${String(source?.text ?? "").trim()}`
+    ),
+  ].join("\n");
+}
+
+async function readTicketContext(
+  ticketId: string
+) {
+  const jiraIssue =
+    await getJiraIssue(ticketId);
+
+  if (!jiraIssue) {
+    throw new Error(
+      `Could not fetch Jira issue: ${ticketId}`
+    );
+  }
+
+  const descriptionText =
+    adfToText(jiraIssue.description);
+
+  const acceptanceCriteriaText =
+    formatJiraAcceptanceCriteria(
+      jiraIssue.acceptanceCriteriaDiscovery
+    );
+
+  const acceptanceSourceLedger =
+    buildPlannerAcceptanceSourceLedger({
+      summary:
+        jiraIssue.summary,
+      descriptionText,
+      descriptionAdf:
+        jiraIssue.description,
+      acceptanceCriteriaDiscovery:
+        jiraIssue.acceptanceCriteriaDiscovery,
+    });
+  const jiraRouteSourceUnits =
+    buildPlannerJiraSourceUnits({
+      summary: jiraIssue.summary,
+      descriptionText,
+      descriptionAdf:
+        jiraIssue.description,
+      acceptanceCriteriaDiscovery:
+        jiraIssue.acceptanceCriteriaDiscovery,
+    });
+
   let githubContext = "";
 
   try {
-    githubContext = await getGithubChangeContext(ticketId);
+    githubContext =
+      await getGithubChangeContext(
+        ticketId
+      );
   } catch (error: any) {
     githubContext = `
 --- GITHUB CHANGE CONTEXT ---
@@ -66,19 +186,81 @@ Could not fetch GitHub changes. Reason: ${error.message}
 `;
   }
 
-  return `
+  const fileContents = `
 --- JIRA TICKET ---
 Key: ${jiraIssue.key}
 Summary: ${jiraIssue.summary}
 Status: ${jiraIssue.status}
 Description: ${descriptionText}
 
+--- JIRA ACCEPTANCE CRITERIA ---
+${acceptanceCriteriaText}
+
 ${githubContext}
 `;
+  const routeEvidence =
+    extractPlannerRouteEvidence({
+      jiraSummary: jiraIssue.summary,
+      jiraDescription: descriptionText,
+      jiraAcceptanceCriteria:
+        acceptanceCriteriaText,
+      jiraSourceUnits:
+        jiraRouteSourceUnits,
+      githubContext,
+    });
+
+  return {
+    fileContents,
+    acceptanceSourceLedger,
+    routeEvidence,
+  };
+}
+
+export async function readTicketFiles(
+  ticketId: string
+) {
+  const context =
+    await readTicketContext(ticketId);
+
+  return context.fileContents;
 }
 
 export async function generateTestPlan(ticketId: string) {
-  const fileContents = await readTicketFiles(ticketId);
+  const {
+    fileContents,
+    acceptanceSourceLedger,
+    routeEvidence,
+  } = await readTicketContext(ticketId);
+  const acceptanceObligationLedger =
+    buildPlannerAcceptanceObligationLedger(
+      acceptanceSourceLedger
+    );
+  const sourceDerivedObligationMemberLedger =
+    buildPlannerSourceDerivedObligationMemberLedger({
+      sourceLedger: acceptanceSourceLedger,
+      obligationLedger: acceptanceObligationLedger,
+    });
+  const sourceMemberAuthorityContext =
+    sourceDerivedObligationMemberLedger.memberSets.flatMap((memberSet) =>
+      memberSet.members.map((member) => ({
+        memberId: member.memberId,
+        parentObligationId: memberSet.parentObligationId,
+        sourceUnitRef: memberSet.sourceUnitRef,
+        dimension: memberSet.dimension,
+        kind: member.kind,
+        exactSourceText: member.exactSourceText,
+      }))
+    );
+  const acceptanceAuthorityContext = JSON.stringify({
+    sourceStatus: acceptanceObligationLedger.sourceStatus,
+    derivationStatus:
+      acceptanceObligationLedger.derivationStatus,
+    obligations:
+      acceptanceObligationLedger.obligations,
+    unresolvedSourceUnitIds:
+      acceptanceObligationLedger.unresolvedSourceUnitIds,
+    sourceDerivedObligationMembers: sourceMemberAuthorityContext,
+  }, null, 2);
 
   const systemPrompt = `
 You are a senior QA engineer. I will give you a real Jira ticket. Create a test plan and return ONLY valid JSON.
@@ -88,7 +270,8 @@ Important context:
 - The Jira issue defines the test scope. Treat its summary, description, and acceptance criteria as the authoritative product behavior to test.
 - Use GitHub changed files, patches, commit messages, endpoints, routes, components, fields, labels, and UI copy only as technical evidence for behavior already within the Jira scope.
 - Do not generate coverage for unrelated, collateral, cleanup, refactor, copy, or regression changes merely because they appear in the same pull request, commit, or merged diff.
-- When Jira acceptance criteria are empty, infer scope from the Jira summary and description. Do not treat the entire GitHub diff as the issue scope.
+- Treat Jira acceptance criteria as empty only when Acceptance Criteria Discovery Status is RESOLVED and no populated acceptance criteria are supplied. UNAVAILABLE means source coverage is unknown, not empty; do not claim complete acceptance coverage from summary and description alone.
+- When Jira acceptance criteria are confirmed empty, infer scope from the Jira summary and description. Do not treat the entire GitHub diff as the issue scope.
 - Before returning JSON, verify that every apiCase and browserCase directly tests the Jira issue. Remove any case whose only justification is that it appears in the same GitHub change.
 - If GitHub context is missing or incomplete, mark unknown paths/routes as "UNKNOWN" instead of inventing them.
 - Do not reuse routes, issue names, or test data from previous issues.
@@ -100,13 +283,8 @@ Important context:
 - For assertTextVisible, copy multi-word UI text verbatim from Jira or GitHub evidence. Do not transform a semantic requirement into a guessed title-cased field, column, heading, button, status, or indicator label. When no exact visible label is supplied, omit that exact assertion and place the unsupported human-verification requirement in manualChecks.
 - Do not place ungrounded numeric or named values into query parameters. When a query behavior requires unavailable fixture IDs, document the fixture requirement instead of inventing executable values.
 - The dedicated createDraftJobAndVerifyRedirect action is allowed to generate its own unique QA-owned job title at runtime. Do not put that generated title or any invented record value into the plan.
-- PLANNER_FIXTURE_POLICY_V1: Every browserCase must include runtimeFixturePolicy with either "exact" or "compatible-state".
-- Use "exact" when the concrete record identity itself is required by the Jira summary, description, or acceptance criteria. Under exact policy the runner must not replace the requested entity with another runtime record.
-- Use "compatible-state" when a concrete record appears in GitHub tests, seed data, mocks, fixtures, examples, or implementation context but Jira requires the behavior or state rather than that exact record identity.
-- For invoice drawer cases, compatible-state is also allowed without a planner invoice number when Jira or GitHub grounds the required invoice state and the specialized runtime resolver can safely select and verify a real invoice. Do not invent a concrete invoice value.
-- A compatible-state candidate remains only a grounded resolver hint. The goal, successCriteria, and automatedChecks must describe opening a compatible runtime record in the required state and must not claim that the candidate identity itself was opened.
-- Never use compatible-state as permission for arbitrary substitution. It is valid only when a specialized runner-owned resolver verifies the required route, table view, entity type, state, and selected runtime identity.
-- When exactness is unclear, use "exact". Missing or incompatible fixture data must become BLOCKED with TEST_DATA_ISSUE classification rather than FAIL or MANUAL_REQUIRED.
+- PLANNER_PROPOSAL_ONLY_FIXTURE_POLICY_V1: Browser cases may describe the runtime records, lifecycle states, ownership conditions, permissions, or data shapes they need through fixtureRequirements, but the model must not choose runtime fixture substitution policy.
+- Do not emit runtimeFixturePolicy in browserCase objects. Exact-versus-compatible fixture policy is derived deterministically after generation from authoritative source identity, source-backed state requirements, and registered runtime resolver capabilities.
 
 General rules:
 1. Include API cases and browser cases if relevant.
@@ -117,33 +295,41 @@ General rules:
 6. Do NOT generate unauthenticated browserCases yet because the browser runner does not support unauthenticated execution. Mention unauthenticated browser coverage in notes instead.
 7. Do NOT use unsupported personas such as "company_member".
 8. Do NOT invent endpoint paths. If the Jira ticket or GitHub diff does not provide an endpoint base path, set the base path as "UNKNOWN".
-8a. If query parameters and their concrete values are clearly visible in the Jira ticket or GitHub diff, append that exact grounded query string after UNKNOWN. If the values are not supplied, do not invent or append query-parameter values. This lets the runner preserve only source-grounded query intent while resolving the base path later.
+8a. If API query parameters and their concrete values are clearly visible in the Jira ticket or GitHub diff, append that exact grounded query string after UNKNOWN for the API case only. If the values are not supplied, do not invent or append query-parameter values. An API endpoint or network-request query parameter must never be reused as evidence that the browser address bar uses the same query key.
 9. Do NOT invent browser routes. If the Jira ticket or GitHub diff does not provide a route, set "startRoute": "UNKNOWN".
 10. When an exact API path template is visible in the GitHub diff, generated API contract, or supplied endpoint catalog, preserve the canonical placeholders such as "{companyId}", "{projectId}", "{jobId}", "{talentId}", "{requestId}", or "{id}". The runner resolves supported placeholders from execution context. Do not invent placeholder names or numeric IDs. Use "UNKNOWN" only when no sufficiently relevant canonical path template is available.
 11. For POST, PATCH, or DELETE requests, include a realistic "body" only if the Jira ticket or GitHub diff clearly provides enough information. Otherwise set "path": "UNKNOWN" and explain that GitHub diff/API contract is needed.
+11a. expect.status must be one exact HTTP status integer from 100 through 599 only when that exact status is grounded in Jira or the API contract. Otherwise use "UNKNOWN". Never encode alternatives or prose such as "401_or_403", "401 or 403", or "2xx" in expect.status.
 12. Generic destructive browser actions remain prohibited. Do not use clickButton, clickText, openMenu, or selectOption to trigger Reject, Delete, Submit, Send, Approve, Archive, Invite, Remove, Save Draft, Publish, Create, or similar state-changing operations. The only permitted browser mutation is createDraftJobAndVerifyRedirect, and only when the Jira scope explicitly requires verification of the post-creation job redirect. That dedicated action creates one uniquely named QA draft, verifies its exact redirect, and cleans up the exact created resource. Next and Previous remain allowed only for safe, non-persisting wizard navigation.
 13. Balance meaningful coverage with executability. Missing routes, API contracts, fixtures, or required states should reduce confidence, but must not erase important Jira-scope acceptance coverage. Generate separate cases only for distinct behaviors or states that are directly supported by the Jira scope. GitHub context alone is not sufficient justification for an additional case. Do not generate duplicates that test the same behavior with trivial wording or data changes.
 14. Return ONLY valid JSON. No markdown.
 15. Never output standalone string values inside objects. Every object field must be a valid "key": value pair.
 16. Do not output duplicate malformed fields such as "company_admin", before "persona".
 17. Every apiCase object must contain exactly these top-level fields: id, persona, method, path, body, expect.
-18. Every browserCase object must contain exactly these top-level fields: id, persona, goal, startRoute, successCriteria, runtimeFixturePolicy, automatedChecks, manualChecks, fixtureRequirements, steps.
-19. Decompose the Jira acceptance criteria into distinct testable behaviors before generating cases. Every major acceptance criterion must be covered by at least one API or browser case when relevant. If acceptance criteria are empty, use only the Jira summary and description to establish scope; use the GitHub diff only to discover the implementation details of that scoped behavior.
-19a. Every browserCase must separate verdict scope into three arrays:
+18. Every browserCase object is a NON-AUTHORITATIVE interaction candidate and must contain exactly these top-level fields: id, persona, goal, startRoute, successCriteria, automatedChecks, manualChecks, fixtureRequirements, steps.
+19. Browser semantic planning is primary. Return browserSemanticCandidates that reference only the supplied authoritative obligation IDs and exact sourceUnitIds. A candidate proposes behavior, interaction shape, persona, target, fixture needs, proof meaning, and relationship hints; it never grants authority to any of them.
+19l. sourceMemberCoverageClaims is optional. When supplied, it must be an array of only exact memberId values from the read-only authoritative source-member list for that candidate's obligation and sourceUnitIds. It describes intended semantic coverage only: it grants no source, route, target, fixture, execution, proof, or verdict authority. Never invent, rename, or use free-form member names.
+19a. Each browserSemanticCandidate must reference one proposedCaseId from browserCases. Do not create acceptance text absent from its referenced obligation. Relationship hints are candidate-only: separate bullets, sentences, routes, personas, or semantic families do not prove independence.
+19b. TICKET COVERAGE is not CASE VERDICT. Do not copy ticket-wide lifecycle, migration, visual, backend, permission, or manual requirements into every interaction candidate. A check or fixture need must list the exact obligationIds it supports.
+19c. Do not merge semantic candidates merely because they share a route, persona, fixture, interaction, or proof family. The deterministic planner owns final grouping, authority, allocation, budget, and case materialization.
+19d. Decompose the Jira acceptance criteria into bounded semantic candidates before proposing interaction shells. If no authoritative obligation IDs are supplied, return an empty browserSemanticCandidates array rather than inventing authority.
+19e. Every browserCase candidate must separate proposed scope into three arrays:
     - automatedChecks: acceptance criteria that the supported runner steps and captured evidence can verify automatically.
     - manualChecks: acceptance criteria that require human judgment, unsupported interaction, external verification, or an unavailable deterministic oracle.
     - fixtureRequirements: runtime records, lifecycle states, ownership conditions, data shapes, or permission combinations required before execution.
-19b. successCriteria must be a concise description of the expected product behavior. Do not put phrases such as route not supplied, prerequisite not supplied, must be checked manually, requires a specific fixture, or checked separately into successCriteria.
-19c. A non-empty manualChecks array must not by itself downgrade an otherwise valid automated PASS. Manual checks remain separately reported coverage.
-19d. Missing or incompatible fixtureRequirements must produce BLOCKED or TEST_DATA_ISSUE behavior, not an ordinary product FAIL.
-19e. automatedChecks must correspond to supported deterministic steps, visible source-grounded UI evidence, URL assertions, or another available automated oracle. Do not claim automated coverage for a criterion that the generated steps cannot verify.
-20. The test-case budget is strict:
+19f. Candidate successCriteria must describe only the obligations referenced by its semantic candidate. Do not put route, fixture, or manual-execution limitations into successCriteria.
+19g. Candidate manualChecks remain untrusted proposals. The deterministic planner may retain only exact source obligations belonging to the same effective verdict group.
+19h. Missing or incompatible fixtureRequirements must produce blocked ticket-level accounting, not an ordinary product failure.
+19i. automatedChecks must correspond to proposed deterministic steps, but only source-authorized acceptance checks with an exact bound proof primitive may discharge an obligation.
+19j. Every proposedChecks item must be an object with exactly text, obligationIds, and proposedRole. proposedRole must be one of ACCEPTANCE_PROOF, SUPPLEMENTAL_SANITY, PRECONDITION, or STRUCTURAL_SUPPORT. Do not emit MANUAL_REVIEW, MANUAL_VERIFICATION, or another role.
+19k. Every proposedFixtureNeeds item must be an object with exactly text and obligationIds. Every proposedRelationshipHints item must be an object with exactly relationship, obligationIds, dependsOnObligationIds, and reason. relationship must be ATOMIC, INDEPENDENT, DEPENDS_ON, or UNKNOWN. These nested values remain candidate-only and must never be emitted as standalone strings. DEPENDS_ON requires exact dependsOnObligationIds; use UNKNOWN when dependency identity is not exact.
+20. The final test-case budget is strict:
    - Generate at most 4 apiCases.
-   - Generate at most 4 browserCases.
-   - Generate at most 8 total cases.
+   - You may propose up to 8 browser interaction candidate shells. The deterministic planner materializes at most 4 final browserCases.
+   - Materialize at most 8 final API plus browser cases.
    - Treat these as hard maximums, not target quotas.
    - Order cases from highest to lowest acceptance-criterion and regression value.
-   - Merge compatible checks from the same workflow into one case when they use the same persona, route or endpoint, fixture state, and prerequisite chain.
+   - Never merge independently proposed browser acceptance units merely to fit the final budget.
    - Do not create separate cases for trivial wording, data-value, status-code, undefined/null, viewport, or persona variations unless they represent a distinct acceptance criterion or material product risk.
    - When the ticket contains more behaviors than the budget allows, prioritize the major acceptance criteria and highest-risk behavior, then describe omitted manual or unsupported coverage in overall notes.
 21. For stateful features, consider positive, negative, permission, error, empty, and lifecycle-state coverage, but include only the highest-value distinct states supported by the Jira scope. GitHub context may provide implementation evidence, but must not independently expand the issue scope.
@@ -175,9 +361,12 @@ Every browserCase MUST include a "steps" array. The browser runner supports ONLY
    Use only after openMenu when the exact safe option label is grounded in Jira or GitHub context.
    Example: { "action": "selectOption", "text": "Newest" }
 9. selectRuntimeFilterOption
-   Use after openMenu when a filter query key is grounded but the exact safe option label or value is unavailable. The runner discovers the related visible filter control, selects one safe unselected runtime option, and requires that the exact query key changes in the URL.
-   queryKey is the exact URL key without "=". hint is an optional human-readable control hint.
-   Example: { "action": "selectRuntimeFilterOption", "queryKey": "project", "hint": "Project" }
+   Use after openMenu when the filter dimension is grounded in Jira or frontend UI evidence, but the exact safe option label or fixture value is unavailable. The runner discovers the related visible filter control and selects one safe unselected runtime option.
+   This action has two distinct verification modes:
+   - Use verification "visible-state" for an ordinary UI filter whose selected state is visibly observable but whose browser URL behavior is not grounded. Supply filterKey as a normalized machine-readable form of the source-grounded UI filter dimension and optionally supply its exact visible label as hint. Do not derive filterKey solely from an API endpoint or request query parameter.
+   - Use verification "url", or omit verification for the default URL mode, only when Jira browser-URL language or frontend router code explicitly establishes the browser query contract. Supply queryKey as the exact browser URL key without "=".
+   Visible-state example: { "action": "selectRuntimeFilterOption", "filterKey": "status", "hint": "Status", "verification": "visible-state" }
+   URL example: { "action": "selectRuntimeFilterOption", "queryKey": "project", "hint": "Project", "verification": "url" }
 10. createDraftJobAndVerifyRedirect
     Use only for Jira-scoped post-creation job redirect behavior. The runner generates one unique QA-owned draft title, selects source-grounded safe wizard values, observes the exact create response, verifies the concrete details route, and deletes the exact created job.
     Use origin "jobs" for the project-scoped workflow and origin "all-jobs" for the all-jobs workflow.
@@ -212,7 +401,7 @@ Browser step requirements:
 - Never invent the openRuntimeControl target. Copy its placeholder, accessible name, or visible control label exactly from Jira or GitHub context; otherwise leave the interaction MANUAL_REQUIRED.
 - For sort, filter, dropdown, popover, Actions, More, or icon-only controls, use openMenu before asserting or selecting menu content.
 - Use selectOption only after openMenu. Do not use clickText for an option that is hidden inside a closed menu or listbox.
-- For Jira behavior involving browser URL paths or query parameters, use assertUrlContains or assertUrlNotContains immediately after the relevant interaction.
+- Use assertUrlContains or assertUrlNotContains only when Jira explicitly requires browser/page URL behavior or frontend route/router code proves that exact browser URL contract. API endpoint and network-request query parameters do not ground browser URL assertions.
 - Never place the first positive assertUrlContains step before the action that establishes the expected URL state, unless the exact asserted substring is already present in startRoute.
 - URL query assertions must include the equals sign, such as "tab=" or "project=". Never use a bare assertion such as "tab" or "project".
 - clickTopTab must refer to a real tab control whose exact label is grounded in Jira or GitHub context. Do not use page headings or sidebar labels such as Payments or All payments as invented tab labels.
@@ -222,20 +411,22 @@ Browser step requirements:
 - Do not use selectRuntimeTopTab when the acceptance criterion requires one specific named tab. That case requires the exact grounded label and clickTopTab.
 - Opening Filters does not establish filter URL state.
 - When the exact safe option label is grounded, use openMenu followed by selectOption.
-- When the exact option label or fixture value is unavailable but an exact URL query key is grounded, use openMenu followed by selectRuntimeFilterOption with that exact queryKey.
-- A typical runtime filter URL flow is openMenu "Filters", selectRuntimeFilterOption with queryKey "project", assertUrlContains "project=", reload, then assertUrlContains "project=" again.
-- selectRuntimeFilterOption may prove only that one safe runtime option changed the grounded query key. It must not claim an exact label-to-value mapping, backend filtering, or filtered record correctness without another oracle.
+- When the exact option label or fixture value is unavailable but Jira or frontend UI evidence grounds the filter dimension, use openMenu followed by selectRuntimeFilterOption with filterKey and verification "visible-state". filterKey must be a normalized form of that source-grounded UI filter dimension; a key found only in an API endpoint or request parameter is insufficient.
+- Visible-state mode must not include queryKey, assertUrlContains, assertUrlNotContains, or reload merely because an API filter uses a similarly named parameter. It proves only that one safe runtime option was selected and its visible selected state changed.
+- When Jira browser-URL language or frontend router code explicitly grounds an exact browser query key, use selectRuntimeFilterOption with queryKey and verification "url", or omit verification to use the default URL mode.
+- A runtime filter URL flow may use openMenu "Filters", selectRuntimeFilterOption, assertUrlContains, reload, and a repeated assertion only when browser URL synchronization and reload persistence are explicitly grounded.
+- Neither runtime mode proves backend filtering, filtered-record correctness, persistence, ordering, or an exact label-to-value mapping without another deterministic oracle.
 - Do not use selectRuntimeFilterOption when Jira requires one specific named filter option. That case requires the exact grounded option label and selectOption.
-- Do not invent a query key. If neither an exact option label nor an exact query key is grounded, leave the case BLOCKED or MANUAL_REQUIRED.
+- Do not invent filterKey or queryKey. filterKey requires a source-grounded UI filter dimension; queryKey requires an explicit browser URL contract. Otherwise leave the unsupported interaction BLOCKED or MANUAL_REQUIRED.
 - wait, reload, assertTextVisible, assertTextNotVisible and URL assertions do not establish tab, filter, sorting or selection state.
 - A tab query assertion requires first selecting or changing the relevant tab. A filter query assertion requires first selecting or changing the relevant filter.
 - When the exact interaction, tab value, filter option or required fixture is unavailable, do not assert that the query key already exists on the initial page. Describe the missing prerequisite and allow the case to become BLOCKED or MANUAL_REQUIRED instead of producing a product FAIL.
-- Use reload only when reload persistence or restoration is part of the Jira behavior. After reload, repeat the URL assertion and add a visible UI assertion when the acceptance criterion also requires the selected control or tab to restore.
-- URL assertion text must be an exact substring grounded in Jira or GitHub context. A grounded query key without a grounded value may verify only key presence and must not overclaim the selected value mapping.
+- Use reload only when browser-state reload persistence or restoration is explicitly part of the Jira behavior or frontend router contract. API request parameters and ordinary filter behavior do not imply reload persistence. After reload, repeat the URL assertion and add a visible UI assertion when the acceptance criterion also requires the selected control or tab to restore.
+- URL assertion text must be an exact browser URL substring grounded in Jira browser-URL language or frontend route/router context. A query key that appears only in an API endpoint, request builder, controller, DTO, or backend filter is not browser URL grounding. A grounded browser query key without a grounded value may verify only key presence and must not overclaim the selected value mapping.
 - Do not infer network request bodies, backend filtering, database persistence, or record ordering from URL assertions.
 - For a sorting control whose current visible value is Newest, Latest, or Oldest, use that current value or the semantic hint Sort in openMenu, then use selectOption for the desired value.
 - Separate directly visible control behavior from hidden semantic behavior. URL synchronization may be included only when assertUrlContains or assertUrlNotContains directly proves the URL requirement. Record ordering, backend request semantics, permissions, and untested persistence must remain separate.
-- For sort or filter changes, prefer one browserCase limited to visibly opening the control, seeing the grounded options, selecting them, and observing the selected UI label. Add URL synchronization to that case only when exact grounded URL assertions can prove it. Keep createdAt/updatedAt ordering, backend filtering, and unsupported network semantics in a separate case that honestly becomes MANUAL_REQUIRED when no supported oracle is available.
+- For sort or filter changes, prefer one browserCase limited to visibly opening the control, seeing source-grounded options, selecting them, and observing the selected UI label. Add browser URL synchronization only when Jira or frontend router evidence explicitly proves that contract. API query parameters, backend filtering, createdAt/updatedAt ordering, and unsupported network semantics must remain separate and honestly become MANUAL_REQUIRED when no supported oracle is available.
 - A UI interaction case must not claim that selecting a sort label proves the underlying record order. Its goal and successCriteria must remain limited to the visible control behavior it can actually demonstrate.
 - For a funnel or icon-only filter control, use { "action": "openMenu", "text": "Filters" }; the runner resolves safe semantic icon metadata and verifies that a menu or listbox actually opened.
 - Do not assert modal content before opening the modal.
@@ -275,14 +466,47 @@ The JSON structure MUST match exactly this:
       }
     }
   ],
+  "browserSemanticCandidates": [
+    {
+      "id": "semantic-1",
+      "proposedCaseId": "web-candidate-1",
+      "obligationIds": ["COPY_AN_EXACT_SUPPLIED_OBLIGATION_ID"],
+      "sourceUnitIds": ["COPY_ITS_EXACT_SOURCE_UNIT_ID"],
+      "proposedBehavior": "source-bounded behavior intent",
+      "proposedPersona": "company_admin",
+      "proposedTargetSurface": "candidate surface description",
+      "sourceMemberCoverageClaims": ["OPTIONAL_EXACT_SUPPLIED_MEMBER_ID"],
+      "proposedMutationClass": "READ_ONLY",
+      "proposedChecks": [
+        {
+          "text": "copy the exact source obligation text when proposing acceptance proof",
+          "obligationIds": ["COPY_AN_EXACT_SUPPLIED_OBLIGATION_ID"],
+          "proposedRole": "ACCEPTANCE_PROOF"
+        }
+      ],
+      "proposedFixtureNeeds": [
+        {
+          "text": "candidate-only runtime state needed before execution",
+          "obligationIds": ["COPY_AN_EXACT_SUPPLIED_OBLIGATION_ID"]
+        }
+      ],
+      "proposedRelationshipHints": [
+        {
+          "relationship": "UNKNOWN",
+          "obligationIds": ["COPY_AN_EXACT_SUPPLIED_OBLIGATION_ID"],
+          "dependsOnObligationIds": [],
+          "reason": "No affirmative source relationship authority is available."
+        }
+      ]
+    }
+  ],
   "browserCases": [
     {
-      "id": "web-1",
+      "id": "web-candidate-1",
       "persona": "company_admin",
       "goal": "what to verify",
       "startRoute": "UNKNOWN",
       "successCriteria": "what should be true",
-      "runtimeFixturePolicy": "exact",
       "automatedChecks": [
         "behavior verified by supported runner steps"
       ],
@@ -306,7 +530,13 @@ The JSON structure MUST match exactly this:
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: fileContents },
+      {
+        role: "user",
+        content:
+          `${fileContents}\n\n` +
+          `--- AUTHORITATIVE ACCEPTANCE OBLIGATION LEDGER ---\n` +
+          `${acceptanceAuthorityContext}\n`,
+      },
     ],
   });
 
@@ -322,47 +552,218 @@ The JSON structure MUST match exactly this:
     cleanPlan = await repairJsonWithModel(aiAnswer, error);
   }
 
-  const parsedPlan = JSON.parse(cleanPlan) as any;
+  const modelProposal = normalizePlannerModelProposal(
+    JSON.parse(cleanPlan) as unknown
+  );
 
-  if (parsedPlan.issueKey !== ticketId) {
+  if (modelProposal.issueKey !== ticketId) {
     throw new Error(
-      `Planner returned issueKey ${String(parsedPlan.issueKey)} instead of ${ticketId}`
+      `Planner returned issueKey ${String(modelProposal.issueKey)} instead of ${ticketId}`
+    );
+  }
+  if (modelProposal.browserCases.length > 0 &&
+      modelProposal.browserSemanticCandidates === undefined) {
+    throw new Error(
+      "Fresh planner output with browserCases must include browserSemanticCandidates"
     );
   }
 
-    const enrichedPlan =
+  // Construct a new deterministic compilation input from proposal-only data.
+  const parsedPlan: any = {
+    issueKey: modelProposal.issueKey,
+    summary: modelProposal.summary,
+    ...(modelProposal.notes !== undefined ? { notes: modelProposal.notes } : {}),
+    apiCases: modelProposal.apiCases,
+    browserCases: modelProposal.browserCases.map(
+      materializePlannerBrowserCaseProposal
+    ),
+    ...(modelProposal.browserSemanticCandidates !== undefined
+      ? { browserSemanticCandidates: modelProposal.browserSemanticCandidates }
+      : {}),
+  };
+
+  const semanticIr =
+    buildPlannerBrowserSemanticIr({
+      rawCandidates:
+        modelProposal.browserSemanticCandidates,
+      browserCases:
+        Array.isArray(parsedPlan.browserCases)
+          ? parsedPlan.browserCases
+          : [],
+      obligationLedger:
+        acceptanceObligationLedger,
+      memberLedger: sourceDerivedObligationMemberLedger,
+    });
+  const semanticMemberCoverageAudit =
+    buildPlannerSemanticMemberCoverageAudit({
+      semanticIr,
+      memberLedger: sourceDerivedObligationMemberLedger,
+    });
+  const verdictGrouping =
+    buildPlannerAcceptanceVerdictGrouping({
+      obligationLedger:
+        acceptanceObligationLedger,
+      sourceLedger:
+        acceptanceSourceLedger,
+      candidateGroups:
+        verdictGroupCandidatesFromSemanticIr({
+          semanticIr,
+          sourceLedger:
+            acceptanceSourceLedger,
+          obligationLedger:
+            acceptanceObligationLedger,
+      }),
+    });
+
+  /*
+   * SOURCE_SURFACE_PROVENANCE_V1
+   *
+   * Route discovery runs before the later semantic-allocation attachment, but
+   * its source-backed surface matcher must see the already-normalized
+   * candidate/obligation context. These are the same deterministic objects
+   * attached to the final plan below; no planner prose is promoted here.
+   */
+  parsedPlan.browserSemanticIr = semanticIr;
+  parsedPlan.acceptanceSourceLedger = acceptanceSourceLedger;
+  parsedPlan.acceptanceObligationLedger = acceptanceObligationLedger;
+  parsedPlan.sourceDerivedObligationMemberLedger =
+    sourceDerivedObligationMemberLedger;
+  parsedPlan.semanticMemberCoverageAudit =
+    semanticMemberCoverageAudit;
+  parsedPlan.sourceInvoiceExecutionCapabilities =
+    compileSourceInvoiceExecutionCapabilities(parsedPlan);
+
+  const enrichedPlan =
     applyBrowserTextAssertionProvenanceGate(
       applyBrowserUrlAssertionPrerequisiteGate(
-        applyPlannerCaseLimits(
-          enrichTestPlanWithDiscovery(
-normalizePlannerBrowserScopes(
-  normalizePlannerUrlSynchronizationSteps(
-    applyPlannerRuntimeFixturePolicies(
-      splitCombinedInvoiceStateCases(
-        parsedPlan
-      ),
-      fileContents
-    )
-  )
-)
-          )
+        normalizePlannerBrowserScopes(
+          applySourceGroundedBrowserFilterCoverage(
+            applySourceBackedBrowserObligationBridge(
+              applyPlannerCaseLimits(
+                enrichTestPlanWithDiscovery(
+                  normalizePlannerUrlSynchronizationSteps(
+                    applyPlannerRuntimeFixturePolicies(
+                      splitCombinedInvoiceStateCases(
+                        normalizePlannerApiStatusExpectations(
+                          parsedPlan
+                        )
+                      ),
+                      fileContents
+                    )
+                  ),
+                  { routeEvidence }
+                ),
+                {
+                  obligationLedger:
+                    acceptanceObligationLedger,
+                  deferBrowserAllocation:
+                    semanticIr.status !==
+                    "LEGACY_INPUT",
+                }
+              ),
+              {
+                sourceLedger:
+                  acceptanceSourceLedger,
+                obligationLedger:
+                  acceptanceObligationLedger,
+                sourceContext: fileContents,
+              }
+            ),
+            fileContents
+          ),
+          {
+            acceptanceSourceLedger,
+            acceptanceObligationLedger,
+          }
         ),
         fileContents
       ),
       fileContents
     );
 
+  /*
+   * PLANNER_ACCEPTANCE_SOURCE_LEDGER_ATTACH_V1
+   *
+   * Deterministic Jira-source provenance is attached only
+   * after model planning and deterministic normalization.
+   *
+   * This metadata is not proof and cannot create PASS.
+   */
+  enrichedPlan.acceptanceSourceLedger =
+    acceptanceSourceLedger;
+
+  /*
+   * PLANNER_ACCEPTANCE_OBLIGATION_LEDGER_ATTACH_V0
+   *
+   * Deterministic, observational obligations are derived from
+   * the immutable Jira source ledger, never from model output.
+   */
+  enrichedPlan.acceptanceObligationLedger =
+    acceptanceObligationLedger;
+
+  /* Source-member coverage metadata only; no V1 execution consumer exists. */
+  enrichedPlan.sourceDerivedObligationMemberLedger =
+    sourceDerivedObligationMemberLedger;
+  enrichedPlan.semanticMemberCoverageAudit =
+    semanticMemberCoverageAudit;
+
+  /* Metadata only: UNKNOWN is fail-closed and no V0 runtime consumes it. */
+  enrichedPlan.acceptanceVerdictGrouping =
+    verdictGrouping;
+
+  applyPlannerBrowserSemanticAllocation({
+    plan: enrichedPlan,
+    semanticIr,
+    verdictGrouping,
+    obligationLedger:
+      acceptanceObligationLedger,
+  });
+
+  /*
+   * PLANNER_ACCEPTANCE_COVERAGE_AUDIT_ATTACH_V1
+   *
+   * Observational only. This records whether authoritative
+   * source units remain explicitly represented after model
+   * planning and deterministic normalization.
+   */
+  enrichedPlan.acceptanceCoverageAudit =
+    auditPlannerAcceptanceCoverage(
+      enrichedPlan,
+      acceptanceSourceLedger
+    );
+
+  enrichedPlan.obligationCaseAllocationAudit =
+    auditPlannerObligationCaseAllocation(
+      enrichedPlan,
+      acceptanceObligationLedger
+    );
+
+  const planSummary = summarizeCompiledPlan(
+    enrichedPlan,
+    modelProposal.browserCases.length,
+    semanticIr.candidates.length,
+    semanticIr.rejectedCandidates.length
+  );
+  const compiledPlan = finalizeCompiledTestPlanArtifact({
+    compilationInputPlan: enrichedPlan,
+    plannerDiagnostics: {
+      rawSemanticCandidates: modelProposal.browserSemanticCandidates
+        ? clonePlannerSemanticCandidateProposals(modelProposal.browserSemanticCandidates)
+        : [],
+    },
+    compilationSummary: planSummary.compilationSummary,
+  });
   const enrichedJson =
-    JSON.stringify(enrichedPlan, null, 2);
+    JSON.stringify(compiledPlan, null, 2);
 
   const apiCaseCount = Array.isArray(
-    enrichedPlan.apiCases
+    compiledPlan.apiCases
   )
     ? enrichedPlan.apiCases.length
     : 0;
 
   const browserCaseCount = Array.isArray(
-    enrichedPlan.browserCases
+    compiledPlan.browserCases
   )
     ? enrichedPlan.browserCases.length
     : 0;
@@ -370,7 +771,21 @@ normalizePlannerBrowserScopes(
   const totalCaseCount =
     apiCaseCount + browserCaseCount;
 
-  if (totalCaseCount === 0) {
+  const hasSemanticCoverageAccounting =
+    compiledPlan.browserSemanticPlanningAudit !==
+      undefined &&
+    compiledPlan.browserSemanticPlanningAudit
+      .status !== "LEGACY_COMPATIBILITY" &&
+    (
+      enrichedPlan.browserSemanticPlanningAudit !==
+        undefined ||
+      acceptanceSourceLedger.sourceUnits.length > 0
+    );
+
+  if (
+    totalCaseCount === 0 &&
+    !hasSemanticCoverageAccounting
+  ) {
     throw new Error(
       `Planner produced an empty test plan for ${ticketId}`
     );
@@ -386,11 +801,7 @@ normalizePlannerBrowserScopes(
     "utf-8"
   );
 
-  console.log(
-    `Test plan saved: ${apiCaseCount} API + ` +
-      `${browserCaseCount} browser = ` +
-      `${totalCaseCount} total`
-  );
+  console.log(formatCompiledPlanSummary(planSummary));
 
   return enrichedJson;
 }

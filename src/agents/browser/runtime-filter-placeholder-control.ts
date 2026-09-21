@@ -324,8 +324,11 @@ async function promoteRuntimeFilterPlaceholderTarget(
 }
 
 export async function findRuntimeFilterControlByPlaceholder(
-  page: Page,
-  tokens: string[]
+  root: Page | Locator,
+  tokens: string[],
+  options: {
+    exactCurrentText?: string;
+  } = {}
 ): Promise<FilterControlCandidate | null> {
   const normalizedTokens = [
     ...new Set(
@@ -367,8 +370,31 @@ export async function findRuntimeFilterControlByPlaceholder(
 
     sources.push(
       {
+        /*
+         * Stable semantic label association is intentionally
+         * checked before placeholder/current-value signals.
+         *
+         * Playwright getByLabel resolves accessible labelling
+         * relationships such as:
+         * - <label for>
+         * - wrapping <label>
+         * - aria-label
+         * - aria-labelledby
+         *
+         * This remains stable when a selected value replaces
+         * the control's placeholder.
+         */
         locator:
-          page.getByPlaceholder(
+          root.getByLabel(
+            tokenRegex
+          ),
+        baseScore: 240,
+        source:
+          `label association contains "${token}"`,
+      },
+      {
+        locator:
+          root.getByPlaceholder(
             tokenRegex
           ),
         baseScore: 230,
@@ -377,7 +403,7 @@ export async function findRuntimeFilterControlByPlaceholder(
       },
       {
         locator:
-          page.getByRole(
+          root.getByRole(
             "combobox",
             {
               name: tokenRegex,
@@ -389,7 +415,7 @@ export async function findRuntimeFilterControlByPlaceholder(
       },
       {
         locator:
-          page.getByText(
+          root.getByText(
             placeholderRegex
           ),
         baseScore: 180,
@@ -586,6 +612,49 @@ export async function findRuntimeFilterControlByPlaceholder(
     (left, right) =>
       right.score - left.score
   );
+
+  const requiredExactText =
+    normalize(
+      options.exactCurrentText
+    );
+
+  if (requiredExactText) {
+    const exactCandidates =
+      candidates.filter(
+        (candidate) =>
+          normalize(
+            candidate.currentText
+          ) === requiredExactText
+      );
+
+    if (exactCandidates.length === 1) {
+      const exact =
+        exactCandidates[0]!;
+
+      return {
+        locator:
+          exact.locator,
+
+        score:
+          exact.score,
+
+        descriptor:
+          `${exact.descriptor} | exact current-text match`,
+
+        currentText:
+          exact.currentText,
+
+        nativeSelect:
+          exact.nativeSelect,
+      };
+    }
+
+    /*
+     * Exact resolution was explicitly requested.
+     * Do not fall back to a fuzzy candidate.
+     */
+    return null;
+  }
 
   const best =
     candidates[0];

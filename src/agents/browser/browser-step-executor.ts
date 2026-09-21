@@ -3,12 +3,18 @@ import type {
 } from "playwright";
 import type {
   BrowserCheckpointCapture,
+  BrowserInteractionExecutionEvidence,
+  BrowserExpandedSurfaceObservation,
+  BrowserRuntimeTopTabObservation,
   BrowserStep,
   BrowserStepResult,
 } from "./browser-execution-types.js";
 import type {
   BrowserDeterministicEvidence,
 } from "./evidence-review.js";
+import {
+  buildSuccessfulInteractionEvidence,
+} from "./browser-interaction-execution-evidence.js";
 import {
   getBrowserCaseText,
 } from "./browser-case-relevance.js";
@@ -22,6 +28,9 @@ import {
   openMatchingTableRowDetail,
 } from "./generic-browser-actions.js";
 import {
+  openReadOnlyExpandedSurface,
+} from "./browser-expanded-surface-interaction.js";
+import {
   openSmartMenu,
   selectRuntimeTopTab,
   selectSmartOption,
@@ -34,6 +43,9 @@ import {
   isInvoiceRowClickRequest,
   resolveAndOpenInvoiceRow,
 } from "./browser-entity-interaction.js";
+import type {
+  BrowserRuntimeFixturePreparationResult,
+} from "./browser-runtime-fixture-preparation.js";
 import {
   createDraftJobAndVerifyRedirect,
 } from "./browser-job-creation-redirect.js";
@@ -51,6 +63,30 @@ import {
   isBrowserTextVisible,
 } from "./browser-text-visibility.js";
 import {
+  observeBrowserPage,
+} from "./browser-observation.js";
+import {
+  evaluateBrowserOrderingRequirement,
+  summarizeBrowserOrderingEvidenceParity,
+  type BrowserOrderingEvidence,
+} from "./browser-ordering-evidence.js";
+import type {
+  FrontendVisibleFieldProvenance,
+} from "../../discovery/frontend-visible-field-provenance.js";
+import type {
+  BrowserOrderingRequirement,
+} from "../../planner/types.js";
+import type {
+  BrowserCollectionFilterRequirement,
+} from "../../planner/types.js";
+import {
+  executeGroundedCollectionFilterRequirement,
+  type BrowserCollectionFilterEvidence,
+} from "./browser-grounded-search-proof.js";
+import {
+  assertSurfaceControlsInObservation,
+} from "./browser-surface-control-assertion.js";
+import {
   prepareActionsMenuForAssertion,
 } from "./browser-actions-menu-assertion.js";
 import {
@@ -59,6 +95,12 @@ import {
   isSanityAssertionText,
   requiresPanelOrModalBrowserCase,
 } from "./browser-step-result-policy.js";
+import {
+  buildRequirementActionPlan,
+} from "./browser-requirement-action-plan.js";
+import {
+  ensureRequiredFeatureSurface,
+} from "./browser-feature-surface-resolver.js";
 
 
 
@@ -72,16 +114,93 @@ export async function runGenericBrowserSteps(
   testCase: any,
   captureCheckpoint?:
     BrowserCheckpointCapture,
-  registerDeferredCleanup?:
+registerDeferredCleanup?:
     (
 cleanup: DeferredCleanup
-    ) => void
+    ) => void,
+  runtimeEvidenceOptions: {
+    visibleFieldProvenance?:
+      FrontendVisibleFieldProvenance[];
+    executionPersona?:
+      "company_admin" | "talent";
+  } = {}
 ): Promise<BrowserStepResult> {
-  const steps = testCase.steps as BrowserStep[] | undefined;
-  const notes: string[] = [];
+  const requirementActionPlan =
+    buildRequirementActionPlan(
+      testCase
+    );
+  const steps =
+    requirementActionPlan.steps;
+  const notes: string[] = [
+    ...requirementActionPlan.notes,
+  ];
+
+  for (
+    const note of
+    requirementActionPlan.notes
+  ) {
+    console.log(
+      ` Generic browser steps: ${note}`
+    );
+  }
 
   const deterministicEvidence:
     BrowserDeterministicEvidence[] = [];
+  const interactionExecutionEvidence:
+  BrowserInteractionExecutionEvidence[] = [];
+  const runtimeTopTabObservations:
+    BrowserRuntimeTopTabObservation[] = [];
+  const expandedSurfaceObservations:
+    BrowserExpandedSurfaceObservation[] = [];
+  const runtimeFixturePreparations:
+    BrowserRuntimeFixturePreparationResult[] = [];
+  const orderingRequirements:
+    BrowserOrderingRequirement[] =
+      Array.isArray(
+        testCase?.acceptanceScope
+          ?.orderingRequirements
+      )
+        ? testCase.acceptanceScope
+            .orderingRequirements
+        : [];
+  const orderingEvidence:
+    BrowserOrderingEvidence[] = [];
+  const collectionFilterRequirements:
+    BrowserCollectionFilterRequirement[] =
+      Array.isArray(
+        testCase?.acceptanceScope
+          ?.collectionFilterRequirements
+      )
+        ? testCase.acceptanceScope
+            .collectionFilterRequirements
+        : [];
+  const collectionFilterEvidence:
+    BrowserCollectionFilterEvidence[] = [];
+  const runtimeObservationResult = () => ({
+    ...(runtimeTopTabObservations.length > 0
+      ? { runtimeTopTabObservations }
+      : {}),
+    ...(expandedSurfaceObservations.length > 0
+      ? { expandedSurfaceObservations }
+      : {}),
+    ...(runtimeFixturePreparations.length > 0
+      ? { runtimeFixturePreparations }
+      : {}),
+    ...(orderingRequirements.length > 0
+      ? {
+          orderingEvidence,
+          orderingEvidenceParity:
+            summarizeBrowserOrderingEvidenceParity({
+              requirements:
+                orderingRequirements,
+              evidence: orderingEvidence,
+            }),
+        }
+      : {}),
+    ...(collectionFilterRequirements.length > 0
+      ? { collectionFilterEvidence }
+      : {}),
+  });
 
   if (!Array.isArray(steps) || steps.length === 0) {
     const note =
@@ -101,6 +220,39 @@ cleanup: DeferredCleanup
   let hasFailedAssertion = false;
   let needsManualVerification = false;
   let hasActionLimitation = false;
+  let lastOpenedMenuHint:
+    string | undefined;
+
+  for (const requirement of collectionFilterRequirements) {
+    const execution =
+      await executeGroundedCollectionFilterRequirement({
+        page,
+        requirement,
+      });
+    collectionFilterEvidence.push(execution.evidence);
+    deterministicEvidence.push(
+      ...execution.deterministicEvidence
+    );
+    notes.push(execution.evidence.note);
+    console.log(
+      ` Grounded collection filter proof: ` +
+        `${execution.evidence.status}; ` +
+        `proofReady=${execution.evidence.proofReady}`
+    );
+
+    if (execution.evidence.status === "CONFIRMED") {
+      hasAssertion = true;
+      hasAcceptanceAssertion = true;
+      hasPositiveAcceptanceAssertion = true;
+    } else if (execution.evidence.status === "CONTRADICTED") {
+      hasAssertion = true;
+      hasAcceptanceAssertion = true;
+      hasFailedAssertion = true;
+    } else {
+      needsManualVerification = true;
+      hasActionLimitation = true;
+    }
+  }
 
   const caseText = getBrowserCaseText(testCase);
 
@@ -184,6 +336,16 @@ cleanup: DeferredCleanup
           `${result.note}`
       );
 
+      if (
+        result.runtimeTopTabObservation
+      ) {
+        runtimeTopTabObservations.push({
+          stepIndex,
+          ...result.runtimeTopTabObservation,
+          note: result.note,
+        });
+      }
+
       if (!result.ok) {
         notes.push(
           `manual required: a safe inactive ` +
@@ -198,6 +360,7 @@ cleanup: DeferredCleanup
             "AUTOMATION_LIMITATION",
           notes,
           deterministicEvidence,
+          ...runtimeObservationResult(),
         };
       }
 
@@ -216,25 +379,39 @@ cleanup: DeferredCleanup
       notes.push(result.note);
       console.log(` Generic browser step ${result.note}`);
 
-      if (!result.ok) {
-        hasActionLimitation = true;
+if (!result.ok) {
+  hasActionLimitation = true;
 
-        await tryOpenLikelyFallback(
-          `fallback after clickTopTab "${step.text}"`
-        );
+  await tryOpenLikelyFallback(
+    `fallback after clickText "${step.text}"`
+  );
 
-        notes.push(
-          `manual required: prerequisite tab action failed; ` +
-            `remaining assertions were skipped`
-        );
+  notes.push(
+    `manual required: prerequisite text action failed; ` +
+      `remaining assertions were skipped`
+  );
 
-        return {
-          status: "MANUAL_REQUIRED",
-          reasonCategory:
-            "AUTOMATION_LIMITATION",
-          notes,
-        };
-      }
+  return {
+    status: "MANUAL_REQUIRED",
+    reasonCategory:
+      "AUTOMATION_LIMITATION",
+    notes,
+    ...runtimeObservationResult(),
+  };
+}
+
+const interactionEvidence =
+  buildSuccessfulInteractionEvidence({
+    stepIndex,
+    step,
+    note: result.note,
+  });
+
+if (interactionEvidence) {
+  interactionExecutionEvidence.push(
+    interactionEvidence
+  );
+}
 
 await page.waitForTimeout(1000);
 
@@ -287,6 +464,7 @@ continue;
             result.reasonCategory,
           notes,
           deterministicEvidence,
+          ...runtimeObservationResult(),
         };
       }
 
@@ -302,7 +480,54 @@ continue;
     }
 
     if (step.action === "clickButton") {
-      const result = await clickSmartButton(page, step.text);
+      const expandedResult =
+        step.verifyExpandedSurface
+          ? await openReadOnlyExpandedSurface(
+              page,
+              {
+                triggerText: step.text,
+                ...(step.contextText
+                  ? {
+                      contextText:
+                        step.contextText,
+                    }
+                  : {}),
+              }
+            )
+          : undefined;
+      const result = expandedResult ??
+        await clickSmartButton(page, step.text);
+
+      if (expandedResult) {
+        expandedSurfaceObservations.push({
+          stepIndex,
+          action: "clickButton",
+          triggerText: step.text,
+          ...(step.contextText
+            ? {
+                contextText:
+                  step.contextText,
+              }
+            : {}),
+          interactionSucceeded:
+            expandedResult.interactionSucceeded,
+          expandedSurfaceVerified:
+            expandedResult.expandedSurfaceVerified,
+          surfaceRole:
+            expandedResult.surface?.role ??
+            null,
+          surfaceType:
+            expandedResult.surface?.type ??
+            null,
+          surfaceName:
+            expandedResult.surface?.name ??
+            null,
+          verificationSource:
+            expandedResult.surface?.source ??
+            null,
+          note: expandedResult.note,
+        });
+      }
 
       notes.push(result.note);
       console.log(` Generic browser step ${result.note}`);
@@ -324,18 +549,75 @@ continue;
           reasonCategory:
             "AUTOMATION_LIMITATION",
           notes,
+          ...runtimeObservationResult(),
         };
       }
 
-      await page.waitForTimeout(1000);
+      const interactionEvidence =
+  buildSuccessfulInteractionEvidence({
+    stepIndex,
+    step,
+    note: result.note,
+  });
+
+if (interactionEvidence) {
+  interactionExecutionEvidence.push(
+    interactionEvidence
+  );
+}
+
+await page.waitForTimeout(1000);
+
+      await captureCheckpoint?.({
+        stepIndex,
+        step,
+        note: result.note,
+      });
+
       continue;
     }
 
     if (step.action === "openMenu") {
+      const surfaceResolution =
+        await ensureRequiredFeatureSurface(
+          page,
+          testCase,
+          step.text
+        );
+
+      if (
+        surfaceResolution.status ===
+        "ENTERED"
+      ) {
+        notes.push(
+          surfaceResolution.note
+        );
+        console.log(
+          ` Generic browser feature surface: ` +
+            `${surfaceResolution.status} - ` +
+            `${surfaceResolution.note}`
+        );
+      }
+
       const result = await openSmartMenu(
         page,
         step.text
       );
+
+      if (
+        !result.ok &&
+        surfaceResolution.status ===
+          "BLOCKED"
+      ) {
+        notes.push(
+          surfaceResolution.note
+        );
+        console.log(
+          ` Generic browser feature surface: ` +
+            `${surfaceResolution.status} - ` +
+            `${surfaceResolution.note}`
+        );
+      }
 
       notes.push(result.note);
       console.log(
@@ -354,10 +636,14 @@ continue;
           reasonCategory:
             "AUTOMATION_LIMITATION",
           notes,
+    ...runtimeObservationResult(),
         };
       }
 
       await page.waitForTimeout(500);
+
+      lastOpenedMenuHint =
+        step.text;
 
       await captureCheckpoint?.({
         stepIndex,
@@ -411,6 +697,7 @@ continue;
             "AUTOMATION_LIMITATION",
           notes,
           deterministicEvidence,
+          ...runtimeObservationResult(),
         };
       }
 
@@ -427,11 +714,27 @@ continue;
       step.action ===
       "selectRuntimeFilterOption"
     ) {
+      const visibleStateMode =
+        step.verification ===
+        "visible-state";
+
+      const verification =
+        visibleStateMode
+          ? "visible-state"
+          : "url";
+
+      const runtimeFilterKey =
+        step.verification ===
+        "visible-state"
+          ? step.filterKey
+          : step.queryKey;
+
       const result =
         await selectRuntimeFilterOption(
           page,
-          step.queryKey,
-          step.hint
+          runtimeFilterKey,
+          step.hint,
+          verification
         );
 
       notes.push(result.note);
@@ -441,14 +744,104 @@ continue;
           `${result.note}`
       );
 
+      if (
+        visibleStateMode &&
+        result.interactionSucceeded ===
+          true
+      ) {
+        const interactionEvidence =
+          buildSuccessfulInteractionEvidence({
+            stepIndex,
+            step,
+            note: result.note,
+          });
+
+        if (interactionEvidence) {
+          interactionExecutionEvidence.push(
+            interactionEvidence
+          );
+        }
+      }
+
+      const selectedStatePassed =
+        visibleStateMode
+          ? result.visibleStateVerified ===
+            true
+          : result.ok;
+
+      if (
+        visibleStateMode &&
+        selectedStatePassed
+      ) {
+        hasAssertion = true;
+        hasAcceptanceAssertion = true;
+        hasPositiveAcceptanceAssertion =
+          true;
+      }
+
+      deterministicEvidence.push({
+        stepIndex,
+        ...(visibleStateMode &&
+        step.oracleId
+          ? {
+              oracleId:
+                step.oracleId,
+            }
+          : {}),
+        action:
+          "selectRuntimeFilterOption",
+        verificationMode:
+          verification,
+        ...(visibleStateMode
+          ? {
+              ...(result.selectedLabel
+                ? {
+                    targetSelectedLabel:
+                      result.selectedLabel,
+                  }
+                : {}),
+              observedSelectedLabel:
+                result.observedSelectedLabel ??
+                null,
+            }
+          : {}),
+        expected:
+          verification === "visible-state"
+            ? (
+                `Select safe runtime option ` +
+                `"${result.selectedLabel || "(unresolved)"}" ` +
+                `for filter "${step.hint || runtimeFilterKey}" ` +
+                `and observe that exact visible ` +
+                `selected label`
+              )
+            : (
+                `Select one safe runtime option ` +
+                `for query key "${runtimeFilterKey}" ` +
+                `and verify a browser URL transition`
+              ),
+        passed: selectedStatePassed,
+        note: result.note,
+      });
+
       if (!result.ok) {
         notes.push(
-          `manual required: a safe runtime ` +
-            `filter option for query key ` +
-            `"${step.queryKey}" could not be ` +
-            `selected with a verified URL ` +
-            `transition; remaining assertions ` +
-            `were skipped`
+          verification === "visible-state"
+            ? (
+                `manual required: a safe runtime ` +
+                `filter option for ` +
+                `"${step.hint || runtimeFilterKey}" ` +
+                `could not be selected with a ` +
+                `verified visible state; remaining ` +
+                `assertions were skipped`
+              )
+            : (
+                `manual required: a safe runtime ` +
+                `filter option for query key ` +
+                `"${runtimeFilterKey}" could not be ` +
+                `selected with a verified URL ` +
+                `transition; remaining assertions ` +
+                `were skipped`
+              )
         );
 
         return {
@@ -457,6 +850,13 @@ continue;
             "AUTOMATION_LIMITATION",
           notes,
           deterministicEvidence,
+          ...(interactionExecutionEvidence.length >
+          0
+            ? {
+                interactionExecutionEvidence,
+              }
+            : {}),
+          ...runtimeObservationResult(),
         };
       }
 
@@ -472,13 +872,30 @@ continue;
     if (step.action === "selectOption") {
       const result = await selectSmartOption(
         page,
-        step.text
+        step.text,
+        lastOpenedMenuHint
+          ? {
+              menuHint:
+                lastOpenedMenuHint,
+            }
+          : undefined
       );
 
       notes.push(result.note);
       console.log(
         ` Generic browser step ${result.note}`
       );
+
+      deterministicEvidence.push({
+        stepIndex,
+        action: "selectOption",
+        expected:
+          `Select the unique observed option ` +
+          `"${step.text}" and verify its visible ` +
+          `selected state`,
+        passed: result.ok,
+        note: result.note,
+      });
 
       if (!result.ok) {
         notes.push(
@@ -492,10 +909,48 @@ continue;
           reasonCategory:
             "AUTOMATION_LIMITATION",
           notes,
+          ...runtimeObservationResult(),
         };
       }
 
       await page.waitForTimeout(500);
+
+      const matchingOrderingRequirements =
+        orderingRequirements.filter(
+          (requirement) =>
+            String(
+              requirement.selectionHint || ""
+            )
+              .trim()
+              .toLowerCase() ===
+            step.text.trim().toLowerCase()
+        );
+
+      if (
+        matchingOrderingRequirements.length > 0
+      ) {
+        const observation =
+          await observeBrowserPage(page);
+
+        for (const requirement of
+          matchingOrderingRequirements) {
+          orderingEvidence.push(
+            evaluateBrowserOrderingRequirement({
+              requirement,
+              observation,
+              ...(runtimeEvidenceOptions
+                .visibleFieldProvenance
+                ? {
+                    visibleFieldProvenance:
+                      runtimeEvidenceOptions
+                        .visibleFieldProvenance,
+                  }
+                : {}),
+              stepIndex,
+            })
+          );
+        }
+      }
 
       await captureCheckpoint?.({
         stepIndex,
@@ -547,8 +1002,28 @@ continue;
           await resolveAndOpenInvoiceRow(
             page,
             testCase,
-            step.text
+            step.text,
+            {
+              ...(runtimeEvidenceOptions
+                .executionPersona
+                ? {
+                    executionPersona:
+                      runtimeEvidenceOptions
+                        .executionPersona,
+                  }
+                : {}),
+            }
           );
+
+        if (
+          invoiceResult
+            .runtimeFixturePreparation
+        ) {
+          runtimeFixturePreparations.push(
+            invoiceResult
+              .runtimeFixturePreparation
+          );
+        }
 
         notes.push(invoiceResult.note);
 
@@ -621,6 +1096,7 @@ continue;
             reasonCategory:
               "TEST_DATA_ISSUE",
             notes,
+            ...runtimeObservationResult(),
           };
         }
 
@@ -637,6 +1113,7 @@ continue;
           reasonCategory:
             "AUTOMATION_LIMITATION",
           notes,
+          ...runtimeObservationResult(),
         };
       }
 
@@ -697,6 +1174,7 @@ continue;
               "AUTOMATION_LIMITATION",
             notes,
             deterministicEvidence,
+            ...runtimeObservationResult(),
           };
         }
 
@@ -761,10 +1239,18 @@ continue;
           reasonCategory:
             "AUTOMATION_LIMITATION",
           notes,
+          ...runtimeObservationResult(),
         };
       }
 
       await page.waitForTimeout(1000);
+
+      await captureCheckpoint?.({
+        stepIndex,
+        step,
+        note: result.note,
+      });
+
       continue;
     }
 
@@ -804,6 +1290,7 @@ continue;
             "AUTOMATION_LIMITATION",
           notes,
           deterministicEvidence,
+          ...runtimeObservationResult(),
         };
       }
 
@@ -880,6 +1367,19 @@ continue;
 
       deterministicEvidence.push({
         stepIndex,
+        ...(step.oracleId
+          ? {
+              oracleId:
+                step.oracleId,
+            }
+          : {}),
+        ...(step.acceptanceCritical !==
+        undefined
+          ? {
+              acceptanceCritical:
+                step.acceptanceCritical,
+            }
+          : {}),
         action: step.action,
         expected,
         actualUrl,
@@ -894,6 +1394,89 @@ continue;
       );
 
       if (!passed) {
+        hasFailedAssertion = true;
+      }
+
+      continue;
+    }
+
+    if (
+      step.action ===
+      "assertSurfaceControls"
+    ) {
+      /*
+       * GENERIC_BROWSER_SURFACE_CONTROL_ASSERTION_PLUMBING_V1
+       *
+       * The structural oracle consumes only a fresh bounded
+       * BrowserObservation. It does not query global page text
+       * or select controls by DOM order.
+       */
+      hasAssertion = true;
+      hasAcceptanceAssertion = true;
+      hasPositiveAcceptanceAssertion =
+        true;
+
+      const observation =
+        await observeBrowserPage(
+          page
+        );
+
+      const assertion =
+        assertSurfaceControlsInObservation({
+          observation,
+          surfaceKind:
+            step.surfaceKind,
+          controls:
+            step.controls,
+        });
+
+      const expectedControls =
+        step.controls
+          .map(
+            (control) =>
+              `${control.kind}:"${control.label}"`
+          )
+          .join(", ");
+
+      const note =
+        `assert ${step.surfaceKind} surface controls ` +
+        `[${expectedControls}]: ` +
+        `${assertion.passed ? "PASS" : "FAIL"} ` +
+        `(${assertion.note})`;
+
+      deterministicEvidence.push({
+        stepIndex,
+        ...(step.oracleId
+          ? {
+              oracleId:
+                step.oracleId,
+            }
+          : {}),
+        ...(step.acceptanceCritical !==
+        undefined
+          ? {
+              acceptanceCritical:
+                step.acceptanceCritical,
+            }
+          : {}),
+        action:
+          "assertSurfaceControls",
+        expected:
+          `Unique ${step.surfaceKind} surface ` +
+          `contains exactly one of each requested ` +
+          `semantic control: ${expectedControls}`,
+        passed:
+          assertion.passed,
+        note,
+      });
+
+      notes.push(note);
+
+      console.log(
+        ` Generic browser assertion ${note}`
+      );
+
+      if (!assertion.passed) {
         hasFailedAssertion = true;
       }
 
@@ -939,6 +1522,7 @@ continue;
             reasonCategory:
               "AUTOMATION_LIMITATION",
             notes,
+            ...runtimeObservationResult(),
           };
         }
       }
@@ -1103,6 +1687,19 @@ let scrollAwareResult:
 
       deterministicEvidence.push({
         stepIndex,
+        ...(step.oracleId
+          ? {
+              oracleId:
+                step.oracleId,
+            }
+          : {}),
+        ...(step.acceptanceCritical !==
+        undefined
+          ? {
+              acceptanceCritical:
+                step.acceptanceCritical,
+            }
+          : {}),
         action: "assertTextVisible",
         expected:
           `Text is visible: ${step.text}`,
@@ -1158,6 +1755,7 @@ let scrollAwareResult:
             reasonCategory:
               "AUTOMATION_LIMITATION",
             notes,
+            ...runtimeObservationResult(),
           };
         }
       }
@@ -1194,7 +1792,9 @@ let scrollAwareResult:
                 allowRequiredAsterisk:
                   true,
               }
-            : {}
+            : {
+                exact: true,
+              }
         );
 
       const passed = !visible;
@@ -1204,6 +1804,19 @@ let scrollAwareResult:
 
       deterministicEvidence.push({
         stepIndex,
+        ...(step.oracleId
+          ? {
+              oracleId:
+                step.oracleId,
+            }
+          : {}),
+        ...(step.acceptanceCritical !==
+        undefined
+          ? {
+              acceptanceCritical:
+                step.acceptanceCritical,
+            }
+          : {}),
         action:
           "assertTextNotVisible",
         expected:
@@ -1226,7 +1839,42 @@ let scrollAwareResult:
     needsManualVerification = true;
   }
 
-  return finalizeBrowserStepResult({
+  const unobservedFinalRequirements =
+    orderingRequirements.filter(
+      (requirement) =>
+        !requirement.selectionHint &&
+        !orderingEvidence.some(
+          (evidence) =>
+            evidence.requirementId ===
+            requirement.requirementId
+        )
+    );
+
+  if (unobservedFinalRequirements.length > 0) {
+    const observation =
+      await observeBrowserPage(page);
+
+    for (const requirement of
+      unobservedFinalRequirements) {
+      orderingEvidence.push(
+        evaluateBrowserOrderingRequirement({
+          requirement,
+          observation,
+          ...(runtimeEvidenceOptions
+            .visibleFieldProvenance
+            ? {
+                visibleFieldProvenance:
+                  runtimeEvidenceOptions
+                    .visibleFieldProvenance,
+              }
+            : {}),
+        })
+      );
+    }
+  }
+
+const finalResult =
+  finalizeBrowserStepResult({
     testCase,
     notes,
     deterministicEvidence,
@@ -1239,5 +1887,28 @@ let scrollAwareResult:
     requiresPanelOrModal,
     isPermissionSensitiveCase,
   });
+
+return {
+  ...finalResult,
+  ...(interactionExecutionEvidence.length > 0
+    ? {
+        interactionExecutionEvidence,
+      }
+    : {}),
+  ...(runtimeTopTabObservations.length > 0
+    ? {
+        runtimeTopTabObservations,
+      }
+    : {}),
+  ...(expandedSurfaceObservations.length > 0
+    ? {
+        expandedSurfaceObservations,
+      }
+      : {}),
+  ...(collectionFilterRequirements.length > 0
+    ? { collectionFilterEvidence }
+    : {}),
+  ...runtimeObservationResult(),
+};
 
 }

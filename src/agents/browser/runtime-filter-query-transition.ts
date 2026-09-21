@@ -2,9 +2,19 @@ import type {
   Page,
 } from "playwright";
 
+export type RuntimeFilterVerificationMode =
+  | "url"
+  | "visible-state";
+
 export type RuntimeFilterInteractionResult = {
   ok: boolean;
   note: string;
+  selectedLabel?: string;
+  interactionSucceeded?: boolean;
+  observedSelectedLabel?:
+    | string
+    | null;
+  visibleStateVerified?: boolean;
 };
 
 type QueryState = {

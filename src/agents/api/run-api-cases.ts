@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import yaml from "yaml";
 import type { TestPlan } from "../../planner/types.js";
+import { readExecutionTestPlan } from "../../planner/compiled-test-plan.js";
 import { getIdTokenForPersona } from "../../auth/firebase.js";
 import { resolveExecutionContext } from "./setup-resolver.js";
-import { resolveSkillsRuntimeFixture } from "./skills-runtime-resolver.js";
+import {
+  copySkillsRuntimeFixture,
+  deriveSkillsRuntimeRequirements,
+  mergeSkillsRuntimeQuery,
+  resolveSkillsRuntimeFixture,
+  type SkillsRuntimeResolution,
+} from "./skills-runtime-resolver.js";
 import { resolveRuntimePathResources } from "./runtime-resource-resolver.js";
 import {
   evaluateApiSemanticExpectations,
@@ -55,6 +62,7 @@ function toRuntimeResourceContext(
     invoiceNumber: context.invoiceNumber,
     invoiceStatus: context.invoiceStatus,
     skillIds: context.skillIds,
+    skillLabels: context.skillLabels,
     skillCategory: context.skillCategory,
     mainDiscipline: context.mainDiscipline,
   };
@@ -188,79 +196,54 @@ export async function runApiCases() {
 
   console.log("Talent execution context:", talentExecutionContext);
 
-  const planFile = fs.readFileSync("qa-results/test-plan.json", "utf8");
-  const cleanPlanFile = planFile
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
+  const plan: TestPlan = readExecutionTestPlan().plan;
 
-  const plan: TestPlan = JSON.parse(cleanPlanFile);
-
-  const planNeedsSkillsRuntimeFixture =
-    (plan.apiCases as any[]).some(
-      (testCase) => {
-        const path = String(
-          testCase?.path || ""
-        );
-
-        return (
-          /\/skills(?:\?|$)/i.test(
-            path
-          ) &&
-          /(?:skillIds|category|mainDiscipline)=UNKNOWN/i.test(
-            path
-          )
-        );
-      }
+  const skillsRuntimeRequirements =
+    deriveSkillsRuntimeRequirements(
+      plan
     );
 
+  let skillsRuntimeResolution:
+    SkillsRuntimeResolution | undefined;
+
   if (
-    planNeedsSkillsRuntimeFixture
+    skillsRuntimeRequirements
+      .requiresSelectedSkills
   ) {
-    const skillsFixture =
+    skillsRuntimeResolution =
       await resolveSkillsRuntimeFixture(
         apiUrl,
-        setupToken
+        setupToken,
+        skillsRuntimeRequirements
       );
 
-    if (skillsFixture) {
-      executionContext.skillIds =
-        skillsFixture.skillIds;
-
-      executionContext.skillCategory =
-        skillsFixture.category;
-
-      executionContext.mainDiscipline =
-        skillsFixture.mainDiscipline;
+    if (
+      skillsRuntimeResolution.status ===
+      "READY"
+    ) {
+      copySkillsRuntimeFixture(
+        executionContext,
+        skillsRuntimeResolution.fixture
+      );
 
       /*
        * Keep the talent context compatible with future
        * talent /skills cases as well.
        */
-      talentExecutionContext.skillIds =
-        skillsFixture.skillIds;
-
-      talentExecutionContext.skillCategory =
-        skillsFixture.category;
-
-      talentExecutionContext.mainDiscipline =
-        skillsFixture.mainDiscipline;
+      copySkillsRuntimeFixture(
+        talentExecutionContext,
+        skillsRuntimeResolution.fixture
+      );
 
       console.log(
-        "API skills execution context:",
-        {
-          skillIds:
-            executionContext.skillIds,
-          category:
-            executionContext.skillCategory,
-          mainDiscipline:
-            executionContext.mainDiscipline,
-        }
+        " API skills runtime resolver selected " +
+          `${skillsRuntimeResolution.fixture.skillIds.length} ` +
+          "existing record(s) for shared API/browser execution."
       );
     } else {
       console.log(
-        "API skills execution context " +
-          "could not be resolved."
+          " API skills runtime resolver blocked: " +
+          skillsRuntimeResolution.reason
       );
     }
   }
@@ -288,6 +271,14 @@ export async function runApiCases() {
 
   for (const rawTestCase of plan.apiCases as any[]) {
     const catalogResolvedRawTestCase = { ...rawTestCase };
+
+    const caseSkillsRuntimeRequirements =
+      deriveSkillsRuntimeRequirements({
+        summary: plan.summary,
+        notes: (plan as any).notes,
+        apiCases: [rawTestCase],
+        browserCases: [],
+      });
 
     const originalRawPath = String(
       rawTestCase.path || "UNKNOWN"
@@ -343,6 +334,44 @@ export async function runApiCases() {
         console.log(` API catalog reason: ${candidate.reason}`);
 
         catalogResolvedRawTestCase.path = resolvedCatalogPath;
+      }
+    }
+
+    let skillsRuntimeCaseFailure:
+      string | undefined;
+
+    if (
+      caseSkillsRuntimeRequirements
+        .requiresSelectedSkills
+    ) {
+      if (
+        skillsRuntimeResolution?.status !==
+        "READY"
+      ) {
+        skillsRuntimeCaseFailure =
+          skillsRuntimeResolution?.reason ??
+          "Selected-skill runtime context could not be resolved safely.";
+      } else {
+        const mergedSkillQuery =
+          mergeSkillsRuntimeQuery(
+            String(
+              catalogResolvedRawTestCase
+                .path || ""
+            ),
+            skillsRuntimeResolution.fixture,
+            caseSkillsRuntimeRequirements
+          );
+
+        if (
+          mergedSkillQuery.status ===
+          "BLOCKED"
+        ) {
+          skillsRuntimeCaseFailure =
+            mergedSkillQuery.reason;
+        } else {
+          catalogResolvedRawTestCase.path =
+            mergedSkillQuery.path;
+        }
       }
     }
 
@@ -411,6 +440,7 @@ export async function runApiCases() {
           : undefined;
 
     const blockReason =
+      skillsRuntimeCaseFailure ??
       unresolvedContractBlockReason ??
       getBlockReason(testCase);
 

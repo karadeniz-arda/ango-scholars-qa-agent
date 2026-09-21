@@ -7,6 +7,7 @@ import {
 } from "./runtime-filter-query-transition.js";
 import type {
   RuntimeFilterInteractionResult,
+  RuntimeFilterVerificationMode,
 } from "./runtime-filter-query-transition.js";
 import {
   isUnsafeFilterOptionLabel,
@@ -19,7 +20,9 @@ import type {
 export async function selectNativeOption(
   page: Page,
   control: Locator,
-  queryKey: string
+  queryKey: string,
+  verification:
+    RuntimeFilterVerificationMode = "url"
 ): Promise<RuntimeFilterInteractionResult> {
   const options = await control
     .locator("option")
@@ -54,19 +57,44 @@ export async function selectNativeOption(
     )
     .catch(() => []);
 
-  const target = options.find(
-    (option) =>
+  const safeOptions = options
+    .filter(
+      (option) =>
       !option.selected &&
       !option.disabled &&
       option.value.length > 0 &&
       !isUnsafeFilterOptionLabel(
         option.label
       )
-  );
+    )
+    .sort(
+      (left, right) =>
+        normalize(
+          left.label
+        ).localeCompare(
+          normalize(right.label)
+        ) ||
+        left.value.localeCompare(
+          right.value
+        )
+    );
+
+  const target = safeOptions[0];
 
   if (!target) {
     return {
       ok: false,
+      ...(verification ===
+      "visible-state"
+        ? {
+            interactionSucceeded:
+              false,
+            observedSelectedLabel:
+              null,
+            visibleStateVerified:
+              false,
+          }
+        : {}),
       note:
         `runtime filter control for ` +
         `"${queryKey}" exposed no safe ` +
@@ -83,11 +111,81 @@ export async function selectNativeOption(
   } catch {
     return {
       ok: false,
+      ...(verification ===
+      "visible-state"
+        ? {
+            selectedLabel:
+              target.label,
+            interactionSucceeded:
+              false,
+            observedSelectedLabel:
+              null,
+            visibleStateVerified:
+              false,
+          }
+        : {}),
       note:
         `runtime native filter option ` +
         `"${target.label}" for ` +
         `"${queryKey}" was not safely ` +
         `selectable`,
+    };
+  }
+
+  if (verification === "visible-state") {
+    await page.waitForTimeout(400);
+
+    const selectedValue =
+      await control
+        .inputValue()
+        .catch(() => "");
+
+    const selectedLabel =
+      String(
+        await control
+          .locator("option:checked")
+          .textContent()
+          .catch(() => "")
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (
+      selectedValue === target.value &&
+      normalize(selectedLabel) ===
+        normalize(target.label)
+    ) {
+      return {
+        ok: true,
+        selectedLabel:
+          target.label,
+        interactionSucceeded: true,
+        observedSelectedLabel:
+          selectedLabel,
+        visibleStateVerified: true,
+        note:
+          `selected runtime filter option ` +
+          `"${target.label}" and verified ` +
+          `the native control visible selected state`,
+      };
+    }
+
+    return {
+      ok: false,
+      selectedLabel:
+        target.label,
+      interactionSucceeded: true,
+      observedSelectedLabel:
+        selectedLabel || null,
+      visibleStateVerified: false,
+      note:
+        `selected runtime filter option ` +
+        `"${target.label}", but the native ` +
+        `control selected state was observed as ` +
+        `${selectedLabel
+          ? `"${selectedLabel}"`
+          : "unavailable"} instead of an exact ` +
+        `target match`,
     };
   }
 
@@ -195,19 +293,21 @@ async function readRuntimeOption(
           return null;
         }
 
-        const normalizeValue = (
-          value: unknown
-        ) =>
-          String(value ?? "")
+        const normalizedLabel =
+          String(label ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+        const normalizedCurrentText =
+          String(rawCurrentText ?? "")
             .replace(/\s+/g, " ")
             .trim()
             .toLowerCase();
 
         if (
-          normalizeValue(label) ===
-          normalizeValue(
-            rawCurrentText
-          )
+          normalizedLabel ===
+          normalizedCurrentText
         ) {
           return null;
         }
@@ -405,13 +505,33 @@ export async function findSafeRuntimeOption(
 
   candidates.sort(
     (left, right) =>
-      right.score - left.score
+      right.score - left.score ||
+      normalize(
+        left.label
+      ).localeCompare(
+        normalize(right.label)
+      )
   );
 
   const best =
     candidates[0];
 
   if (best) {
+    const duplicateBest =
+      candidates.slice(1).some(
+        (candidate) =>
+          candidate.score ===
+            best.score &&
+          normalize(
+            candidate.label
+          ) ===
+            normalize(best.label)
+      );
+
+    if (duplicateBest) {
+      return null;
+    }
+
     return best;
   }
 
@@ -441,6 +561,9 @@ export async function findSafeRuntimeOption(
         .catch(() => 0),
       100
     );
+
+  const structuredCandidates:
+    RuntimeOptionCandidate[] = [];
 
   for (
     let index = 0;
@@ -574,17 +697,53 @@ export async function findSafeRuntimeOption(
       continue;
     }
 
-    console.log(
-      ` Runtime filter option discovery ` +
-        `resolved structured option ` +
-        `"${metadata.label}"`
-    );
-
-    return {
+    structuredCandidates.push({
       locator,
       label: metadata.label,
       score: metadata.score,
-    };
+    });
+  }
+
+  structuredCandidates.sort(
+    (left, right) =>
+      right.score - left.score ||
+      normalize(
+        left.label
+      ).localeCompare(
+        normalize(right.label)
+      )
+  );
+
+  const structuredBest =
+    structuredCandidates[0];
+
+  if (structuredBest) {
+    const duplicateBest =
+      structuredCandidates
+        .slice(1)
+        .some(
+          (candidate) =>
+            candidate.score ===
+              structuredBest.score &&
+            normalize(
+              candidate.label
+            ) ===
+              normalize(
+                structuredBest.label
+              )
+        );
+
+    if (duplicateBest) {
+      return null;
+    }
+
+    console.log(
+      ` Runtime filter option discovery ` +
+        `resolved structured option ` +
+        `"${structuredBest.label}"`
+    );
+
+    return structuredBest;
   }
 
   /*

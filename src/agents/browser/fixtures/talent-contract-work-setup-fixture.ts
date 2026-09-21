@@ -32,6 +32,7 @@ import {
   getRuntimeTalentContractFixture,
 } from "./talent-contract-fixture-context.js";
 import {
+  normalizeGenericFixtureCandidate,
   runGenericFixtureCandidateSelection,
 } from "./generic-fixture-candidate-selector.js";
 import type {
@@ -41,7 +42,9 @@ import type {
   GenericFixtureCandidateProposal,
   GenericFixtureCandidateRequestProposal,
   GenericFixtureCandidateSelectionMode,
+  GenericFixtureCandidateSelectionResult,
   GenericFixtureRequirementContext,
+  RunGenericFixtureCandidateSelectionArgs,
 } from "./generic-fixture-candidate-selector.js";
 
 type WorkSetupMutationMethod =
@@ -117,21 +120,6 @@ export type TalentContractWorkSetupFixtureDependencies = {
     timeoutMs: number
   ) => Promise<void>;
 };
-
-export type SafeWorkSetupCandidateSelection =
-  | {
-      status: "SELECTED";
-      workSetupId: string;
-      workSetupTitle?: string;
-      companyCount: number;
-      visibleCount: number;
-    }
-  | {
-      status: "BLOCKED";
-      reason: string;
-      companyCount: number;
-      visibleCount: number;
-    };
 
 export type WorkSetupRuntimeCandidateAdapterResult =
   | {
@@ -245,6 +233,50 @@ function normalizeWorkSetupFixtureRequirementArray(
   return result;
 }
 
+function getPositiveWorkSetupAutomatedChecks(
+  testCase: any
+): string[] {
+  const steps =
+    Array.isArray(testCase?.steps)
+      ? testCase.steps
+      : [];
+
+const positiveStepChecks: string[] =
+  steps
+    .filter(
+      (step: any) =>
+        step?.action ===
+          "assertTextVisible"
+    )
+    .map((step: any) =>
+      normalizeWorkSetupFixtureRequirementText(
+        step?.text,
+        2000
+      )
+    )
+    .filter(
+      (check: string) =>
+        check.length > 0
+    );
+
+  if (positiveStepChecks.length > 0) {
+    return [
+      ...new Set(
+        positiveStepChecks
+      ),
+    ];
+  }
+
+  return normalizeWorkSetupFixtureRequirementArray(
+    testCase?.automatedChecks
+  ).filter(
+    (check) =>
+      !/\b(?:not visible|not displayed|does not display|must not display|is absent)\b/i.test(
+        check
+      )
+  );
+}
+
 export function buildWorkSetupFixtureRequirementContext(
   testCase: any
 ): GenericFixtureRequirementContext {
@@ -261,9 +293,13 @@ export function buildWorkSetupFixtureRequirementContext(
         4000
       ),
 
+    /*
+     * Removed or previous copy in assertTextNotVisible must
+     * not become a positive candidate subtype constraint.
+     */
     automatedChecks:
-      normalizeWorkSetupFixtureRequirementArray(
-        testCase?.automatedChecks
+      getPositiveWorkSetupAutomatedChecks(
+        testCase
       ),
 
     fixtureRequirements:
@@ -273,18 +309,26 @@ export function buildWorkSetupFixtureRequirementContext(
   };
 }
 
-function workSetupRequirementsAllowReusePreference(
+function getWorkSetupSelectionConstraintText(
   requirements:
     GenericFixtureRequirementContext
-): boolean {
-  const combined = [
-    requirements.goal,
-    requirements.successCriteria,
+): string {
+  return [
     ...requirements.automatedChecks,
     ...requirements.fixtureRequirements,
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function workSetupRequirementsAllowReusePreference(
+  requirements:
+    GenericFixtureRequirementContext
+): boolean {
+  const combined =
+    getWorkSetupSelectionConstraintText(
+      requirements
+    );
 
   return !(
     /\b(?:subtype|category|type|status)\b/.test(
@@ -302,14 +346,10 @@ function workSetupCandidateMeetsRequiredSubtype(
   candidate:
     GenericFixtureCandidateInput
 ): boolean {
-  const automatedSurface = [
-    requirements.goal,
-    requirements.successCriteria,
-    ...requirements.automatedChecks,
-    ...requirements.fixtureRequirements,
-  ]
-    .join(" ")
-    .toLowerCase();
+  const automatedSurface =
+    getWorkSetupSelectionConstraintText(
+      requirements
+    );
 
   if (
     /\bdocument-required indication\b/.test(
@@ -698,6 +738,142 @@ export function adaptWorkSetupRuntimeCandidates(
   };
 }
 
+function workSetupRequirementsAreSubtypeSpecific(
+  requirements:
+    GenericFixtureRequirementContext
+): boolean {
+  return /\b(?:file|document|approval|approved|rejected|pending|completed|reference|subtype|category|type|status)\b/.test(
+    getWorkSetupSelectionConstraintText(
+      requirements
+    )
+  );
+}
+
+function buildDeterministicGenericWorkSetupProposal(
+  args:
+    RunGenericFixtureCandidateSelectionArgs
+): GenericFixtureCandidateProposal | null {
+  if (
+    workSetupRequirementsAreSubtypeSpecific(
+      args.requirements
+    )
+  ) {
+    return null;
+  }
+
+  const eligible =
+    args.candidates
+      .map(
+        normalizeGenericFixtureCandidate
+      )
+      .filter(
+        (candidate) =>
+          candidate.usable &&
+          typeof candidate.label ===
+            "string" &&
+          candidate.label.trim().length >
+            0
+      );
+
+  if (eligible.length === 0) {
+    return null;
+  }
+
+  const reuseAllowed =
+    args.selectionPolicy
+      ?.allowReusePreference ===
+    true;
+
+  const selected =
+    [...eligible].sort(
+      (left, right) => {
+        if (reuseAllowed) {
+          const reuseOrder =
+            Number(
+              right.alreadyAttached
+            ) -
+            Number(
+              left.alreadyAttached
+            );
+
+          if (reuseOrder !== 0) {
+            return reuseOrder;
+          }
+        }
+
+        const labelOrder =
+          String(left.label).localeCompare(
+            String(right.label)
+          );
+
+        return labelOrder !== 0
+          ? labelOrder
+          : left.selectionKey.localeCompare(
+              right.selectionKey
+            );
+      }
+    )[0]!;
+
+  const sameTitleMatches =
+    eligible.filter(
+      (candidate) =>
+        candidate.label ===
+        selected.label
+    );
+
+  if (sameTitleMatches.length !== 1) {
+    return null;
+  }
+
+  return {
+    decision: "SELECT_CANDIDATE",
+    selectionMode:
+      selected.selectionMode,
+    candidateId:
+      selected.selectionKey,
+    confidence: "high",
+    rationale:
+      "The case accepts any compatible populated Work Setup; a stable exact-title candidate was selected, preferring safe reuse when available.",
+    evidence: [
+      {
+        path: "title",
+        expected:
+          selected.label!,
+      },
+    ],
+  };
+}
+
+async function selectWorkSetupFixtureCandidate(
+  selectCandidate:
+    typeof runGenericFixtureCandidateSelection,
+  args:
+    RunGenericFixtureCandidateSelectionArgs
+): Promise<
+  GenericFixtureCandidateSelectionResult
+> {
+  const deterministicProposal =
+    buildDeterministicGenericWorkSetupProposal(
+      args
+    );
+
+  return selectCandidate({
+    ...args,
+    ...(deterministicProposal
+      ? {
+          requestProposal:
+            async () =>
+              deterministicProposal,
+        }
+      : args.requestProposal
+        ? {
+            requestProposal:
+              args.requestProposal,
+          }
+        : {}),
+  });
+}
+
 function isGenericFixtureCandidateSelectionMode(
   value: unknown
 ): value is
@@ -745,7 +921,9 @@ export async function resolveWorkSetupFixtureCandidateDecision(
     }
 
     const selectionResult =
-      await args.selectCandidate({
+      await selectWorkSetupFixtureCandidate(
+        args.selectCandidate,
+        {
         requirements,
         candidates:
           runtimeCandidates.candidates
@@ -775,7 +953,8 @@ export async function resolveWorkSetupFixtureCandidateDecision(
               }
             : {}
         ),
-      });
+        }
+      );
 
     if (
       selectionResult.status ===
@@ -970,114 +1149,6 @@ export async function resolveWorkSetupFixtureCandidateDecision(
           : String(error),
     };
   }
-}
-
-export function selectSafeWorkSetupCandidate(
-  companyData: unknown,
-  visibleTalentData: unknown
-): SafeWorkSetupCandidateSelection {
-  const companyItems =
-    extractItems(companyData);
-
-  const visibleItems =
-    extractItems(
-      visibleTalentData
-    );
-
-  const visibleIds =
-    new Set<string>();
-
-  let unidentifiedVisibleCount = 0;
-
-  for (
-    const item
-    of visibleItems
-  ) {
-    const workSetupId =
-      getVisibleTalentWorkSetupId(
-        item
-      );
-
-    if (workSetupId) {
-      visibleIds.add(
-        workSetupId
-      );
-    } else {
-      unidentifiedVisibleCount += 1;
-    }
-  }
-
-  if (
-    unidentifiedVisibleCount > 0
-  ) {
-    return {
-      status: "BLOCKED",
-      reason:
-        "Existing talent Work Setup records could not be mapped to exact Work Setup IDs, so candidate ownership is unsafe.",
-      companyCount:
-        companyItems.length,
-      visibleCount:
-        visibleItems.length,
-    };
-  }
-
-  for (
-    const item
-    of companyItems
-  ) {
-    if (
-      !workSetupCandidateIsUsable(
-        item
-      )
-    ) {
-      continue;
-    }
-
-    const workSetupId =
-      getCompanyWorkSetupId(
-        item
-      );
-
-    const workSetupTitle =
-      getWorkSetupTitle(
-        item
-      );
-
-    if (
-      workSetupId &&
-      !visibleIds.has(
-        workSetupId
-      )
-    ) {
-      return {
-        status: "SELECTED",
-        workSetupId,
-        ...(
-          workSetupTitle
-            ? {
-                workSetupTitle,
-              }
-            : {}
-        ),
-        companyCount:
-          companyItems.length,
-        visibleCount:
-          visibleItems.length,
-      };
-    }
-  }
-
-  return {
-    status: "BLOCKED",
-    reason:
-      visibleItems.length > 0
-        ? "Every usable company Work Setup is already visible for the selected talent and job."
-        : "No usable company Work Setup candidate with an exact ID was available.",
-    companyCount:
-      companyItems.length,
-    visibleCount:
-      visibleItems.length,
-  };
 }
 
 function normalizeBaseUrl(
@@ -1325,6 +1396,21 @@ const defaultDependencies:
         );
       },
   };
+
+
+/*
+ * CONTROLLED_WORK_SETUP_DEFAULT_DEPENDENCY_FACTORY_V1
+ *
+ * Expose a fresh copy of the production dependency set for
+ * controlled lifecycle diagnostics without changing normal
+ * fixture selection policy or provider behavior.
+ */
+export function createDefaultTalentContractWorkSetupFixtureDependencies():
+  TalentContractWorkSetupFixtureDependencies {
+  return {
+    ...defaultDependencies,
+  };
+}
 
 function buildAttachmentPath(
   companyId: string,
@@ -1918,8 +2004,12 @@ export function createTalentContractWorkSetupFixtureProvider(
             candidates:
               mutationCandidates,
             selectCandidate:
-              dependencies
-                .selectCandidate,
+              (selectionArgs) =>
+                selectWorkSetupFixtureCandidate(
+                  dependencies
+                    .selectCandidate,
+                  selectionArgs
+                ),
             selectionPolicy: {
               allowReusePreference:
                 workSetupRequirementsAllowReusePreference(

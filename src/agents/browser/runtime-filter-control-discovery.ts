@@ -59,16 +59,8 @@ async function scoreFilterControl(
           return null;
         }
 
-        const normalizeValue = (
-          value: unknown
-        ) =>
-          String(value ?? "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .toLowerCase();
-
         const ownText =
-          normalizeValue(
+          String(
             element.getAttribute(
               "aria-label"
             ) ||
@@ -79,8 +71,54 @@ async function scoreFilterControl(
               "aria-valuetext"
             ) ||
             element.innerText ||
-            element.textContent
-          );
+            element.textContent ||
+            ""
+          )
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+        const descendantMetadata =
+          Array.from(
+            element.querySelectorAll<
+              HTMLElement
+            >(
+              [
+                "svg",
+                "[aria-label]",
+                "[title]",
+                "[data-testid]",
+                "[data-icon]",
+                "[data-lucide]",
+              ].join(", ")
+            )
+          )
+            .slice(0, 20)
+            .map((child) =>
+              [
+                child.getAttribute(
+                  "aria-label"
+                ),
+                child.getAttribute(
+                  "title"
+                ),
+                child.getAttribute(
+                  "data-testid"
+                ),
+                child.getAttribute(
+                  "data-icon"
+                ),
+                child.getAttribute(
+                  "data-lucide"
+                ),
+                child.getAttribute(
+                  "class"
+                ),
+              ]
+                .filter(Boolean)
+                .join(" ")
+            )
+            .join(" ");
 
         const labelledBy =
           String(
@@ -132,51 +170,71 @@ async function scoreFilterControl(
             ?.textContent || "";
 
         const ownDescriptor =
-          normalizeValue(
-            [
-              ownText,
-              element.getAttribute(
-                "name"
-              ),
-              element.getAttribute(
-                "data-testid"
-              ),
-              element.getAttribute(
-                "data-slot"
-              ),
-            ]
-              .filter(Boolean)
-              .join(" ")
-          );
+          [
+            ownText,
+            element.getAttribute(
+              "name"
+            ),
+            element.getAttribute(
+              "data-testid"
+            ),
+            element.getAttribute(
+              "data-slot"
+            ),
+            descendantMetadata,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
 
         const labelDescriptor =
-          normalizeValue(
-            [
-              labelledBy,
-              explicitLabel,
-              closestLabel,
-              previousText,
-            ]
-              .filter(Boolean)
-              .join(" ")
-          );
+          [
+            labelledBy,
+            explicitLabel,
+            closestLabel,
+            previousText,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
 
         const nearDescriptor =
-          normalizeValue(
-            parentText
-          ).slice(0, 220);
+          String(parentText || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase()
+            .slice(0, 220);
 
         const broadDescriptor =
-          normalizeValue(
-            grandparentText
-          ).slice(0, 300);
+          String(grandparentText || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase()
+            .slice(0, 300);
 
         const tokens =
           Array.isArray(rawTokens)
             ? rawTokens.map(
-                normalizeValue
+                (value) =>
+                  String(value ?? "")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .toLowerCase()
               )
             : [];
+
+        const directTokenMatchCount =
+          tokens.filter(
+            (token) =>
+              token &&
+              ownDescriptor.includes(
+                token
+              )
+          ).length;
 
         let score = 0;
 
@@ -233,6 +291,21 @@ async function scoreFilterControl(
 
         const nativeSelect =
           tagName === "select";
+
+        const plainButton =
+          tagName === "button" ||
+          role === "button";
+
+        if (
+          plainButton &&
+          role !== "combobox" &&
+          !element.hasAttribute(
+            "aria-haspopup"
+          ) &&
+          directTokenMatchCount === 0
+        ) {
+          return null;
+        }
 
         if (nativeSelect) {
           score += 45;
@@ -307,6 +380,8 @@ export async function findRelevantFilterControl(
   const selector = [
     "main select",
     'main [role="combobox"]',
+    "main button",
+    'main [role="button"]',
     'main button[aria-haspopup]',
     'main [role="button"][aria-haspopup]',
     '[role="dialog"] select',
@@ -377,7 +452,13 @@ export async function findRelevantFilterControl(
 
   candidates.sort(
     (left, right) =>
-      right.score - left.score
+      right.score - left.score ||
+      left.descriptor.localeCompare(
+        right.descriptor
+      ) ||
+      left.currentText.localeCompare(
+        right.currentText
+      )
   );
 
   const best = candidates[0];
@@ -395,9 +476,7 @@ export async function findRelevantFilterControl(
   if (
     second &&
     best.score -
-      second.score < 12 &&
-    best.descriptor !==
-      second.descriptor
+      second.score < 12
   ) {
     return {
       candidate: null,

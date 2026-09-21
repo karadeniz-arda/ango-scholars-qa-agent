@@ -1,3 +1,11 @@
+import { createHash } from "node:crypto";
+import type {
+  PlannerAcceptanceObligationLedger,
+} from "./planner-acceptance-obligation-ledger.js";
+import {
+  findExactObligationIdsForCase,
+} from "./planner-obligation-case-allocation-audit.js";
+
 const MAX_API_CASES = 4;
 const MAX_BROWSER_CASES = 4;
 
@@ -68,6 +76,127 @@ function plannerValueFingerprint(
   }
 }
 
+/*
+ * PLANNER_ACCEPTANCE_AWARE_CASE_DEDUP_V1
+ *
+ * Execution-shape equality is not enough to establish
+ * that two planner cases cover the same acceptance
+ * requirement.
+ *
+ * Deduplication may collapse cases only when their
+ * normalized acceptance allocation is also identical.
+ * Different acceptance semantics fail safe by remaining
+ * distinct, even when route, method, body, or executable
+ * steps are the same.
+ */
+function normalizePlannerAcceptanceList(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) =>
+      normalizePlannerFingerprintText(
+        item
+      )
+    )
+    .filter(Boolean);
+}
+
+function getPlannerAcceptanceFingerprint(
+  testCase: any,
+  kind: "api" | "browser"
+): string {
+  if (kind === "api") {
+    return plannerValueFingerprint({
+      notes:
+        normalizePlannerFingerprintText(
+          testCase?.expect?.notes
+        ),
+    });
+  }
+
+  return plannerValueFingerprint({
+    goal:
+      normalizePlannerFingerprintText(
+        testCase?.goal
+      ),
+    successCriteria:
+      normalizePlannerFingerprintText(
+        testCase?.successCriteria
+      ),
+    automatedChecks:
+      normalizePlannerAcceptanceList(
+        testCase?.automatedChecks
+      ),
+    manualChecks:
+      normalizePlannerAcceptanceList(
+        testCase?.manualChecks
+      ),
+  });
+}
+
+type PlannerCaseKind = "api" | "browser";
+
+type PlannerCaseBudgetRemoval = {
+  originalCaseId: string;
+  kind: PlannerCaseKind;
+  reason:
+    | "REMOVED_EXACT_DUPLICATE"
+    | "REMOVED_REPEATED_DEPENDENCY"
+    | "REMOVED_SEMANTIC_SPECIAL_DUPLICATE"
+    | "REMOVED_CAPACITY_OVERFLOW";
+  acceptanceFingerprint: string;
+  exactObligationIds?: string[];
+};
+
+function boundedAcceptanceFingerprint(
+  testCase: any,
+  kind: PlannerCaseKind
+): string {
+  return createHash("sha256")
+    .update(
+      getPlannerAcceptanceFingerprint(
+        testCase,
+        kind
+      )
+    )
+    .digest("hex")
+    .slice(0, 12);
+}
+
+function removalAudit(
+  testCase: any,
+  kind: PlannerCaseKind,
+  reason: PlannerCaseBudgetRemoval["reason"],
+  obligationLedger?:
+    PlannerAcceptanceObligationLedger
+): PlannerCaseBudgetRemoval {
+  const exactObligationIds =
+    findExactObligationIdsForCase(
+      testCase,
+      obligationLedger
+    );
+
+  return {
+    originalCaseId: String(
+      testCase?.id ?? "unknown"
+    ),
+    kind,
+    reason,
+    acceptanceFingerprint:
+      boundedAcceptanceFingerprint(
+        testCase,
+        kind
+      ),
+    ...(exactObligationIds.length > 0
+      ? { exactObligationIds }
+      : {}),
+  };
+}
+
 function getApiCaseFingerprint(
   testCase: any
 ): string {
@@ -86,6 +215,10 @@ function getApiCaseFingerprint(
     ),
     plannerValueFingerprint(
       testCase?.body ?? {}
+    ),
+    getPlannerAcceptanceFingerprint(
+      testCase,
+      "api"
     ),
   ].join("|");
 }
@@ -128,6 +261,10 @@ function getBrowserCaseFingerprint(
     getBrowserStepsFingerprint(
       testCase
     ),
+    getPlannerAcceptanceFingerprint(
+      testCase,
+      "browser"
+    ),
   ].join("|");
 }
 
@@ -162,6 +299,10 @@ function getMissingDependencyFingerprint(
         "api-dependency",
         method || "unknown",
         apiPath || "unknown",
+        getPlannerAcceptanceFingerprint(
+          testCase,
+          "api"
+        ),
       ].join("|");
     }
 
@@ -185,6 +326,10 @@ function getMissingDependencyFingerprint(
       getBrowserStepsFingerprint(
         testCase
       ),
+      getPlannerAcceptanceFingerprint(
+        testCase,
+        "browser"
+      ),
     ].join("|");
   }
 
@@ -193,8 +338,13 @@ function getMissingDependencyFingerprint(
 
 function deduplicatePlannerCases(
   cases: any[],
-  kind: "api" | "browser"
-): any[] {
+  kind: PlannerCaseKind,
+  obligationLedger?:
+    PlannerAcceptanceObligationLedger
+): {
+  cases: any[];
+  removals: PlannerCaseBudgetRemoval[];
+} {
   const seenCases =
     new Set<string>();
 
@@ -202,6 +352,8 @@ function deduplicatePlannerCases(
     new Set<string>();
 
   const result: any[] = [];
+  const removals:
+    PlannerCaseBudgetRemoval[] = [];
 
   for (const testCase of cases) {
     const fingerprint =
@@ -214,6 +366,14 @@ function deduplicatePlannerCases(
           );
 
     if (seenCases.has(fingerprint)) {
+      removals.push(
+        removalAudit(
+          testCase,
+          kind,
+          "REMOVED_EXACT_DUPLICATE",
+          obligationLedger
+        )
+      );
       continue;
     }
 
@@ -229,6 +389,14 @@ function deduplicatePlannerCases(
         dependencyFingerprint
       )
     ) {
+      removals.push(
+        removalAudit(
+          testCase,
+          kind,
+          "REMOVED_REPEATED_DEPENDENCY",
+          obligationLedger
+        )
+      );
       continue;
     }
 
@@ -243,7 +411,10 @@ function deduplicatePlannerCases(
     result.push(testCase);
   }
 
-  return result;
+  return {
+    cases: result,
+    removals,
+  };
 }
 
 /*
@@ -257,9 +428,16 @@ function deduplicatePlannerCases(
  * explicit assertion içeren case tutulur.
  */
 function mergeInvoiceDrawerSemanticDuplicates(
-  cases: any[]
-): any[] {
+  cases: any[],
+  obligationLedger?:
+    PlannerAcceptanceObligationLedger
+): {
+  cases: any[];
+  removals: PlannerCaseBudgetRemoval[];
+} {
   const result: any[] = [];
+  const removals:
+    PlannerCaseBudgetRemoval[] = [];
 
   const resultIndexByKey =
     new Map<string, number>();
@@ -364,6 +542,10 @@ function mergeInvoiceDrawerSemanticDuplicates(
               testCase
                 ?.runtimeFixturePolicy
             ),
+            getPlannerAcceptanceFingerprint(
+              testCase,
+              "browser"
+            ),
           ].join("|")
         : null;
 
@@ -406,16 +588,42 @@ function mergeInvoiceDrawerSemanticDuplicates(
       );
 
     if (candidateIsPreferred) {
+      removals.push(
+        removalAudit(
+          existingCase,
+          "browser",
+          "REMOVED_SEMANTIC_SPECIAL_DUPLICATE",
+          obligationLedger
+        )
+      );
       result[existingIndex] =
         testCase;
+    } else {
+      removals.push(
+        removalAudit(
+          testCase,
+          "browser",
+          "REMOVED_SEMANTIC_SPECIAL_DUPLICATE",
+          obligationLedger
+        )
+      );
     }
   }
 
-  return result;
+  return {
+    cases: result,
+    removals,
+  };
 }
 
 export function applyPlannerCaseLimits(
-  plan: any
+  plan: any,
+  options: {
+    obligationLedger?:
+      PlannerAcceptanceObligationLedger;
+    /** Candidate interaction shells are budgeted later by semantic allocation. */
+    deferBrowserAllocation?: boolean;
+  } = {}
 ): any {
   const rawApiCases =
     Array.isArray(plan?.apiCases)
@@ -427,16 +635,22 @@ export function applyPlannerCaseLimits(
       ? plan.browserCases
       : [];
 
-  const distinctApiCases =
+  const apiDeduplication =
     deduplicatePlannerCases(
       rawApiCases,
-      "api"
+      "api",
+      options.obligationLedger
     );
 
-const mergedBrowserCases =
-  mergeInvoiceDrawerSemanticDuplicates(
-    rawBrowserCases
-  );
+  const invoiceDeduplication =
+    options.deferBrowserAllocation
+      ? { cases: rawBrowserCases, removals: [] }
+      : mergeInvoiceDrawerSemanticDuplicates(
+          rawBrowserCases,
+          options.obligationLedger
+        );
+  const mergedBrowserCases =
+    invoiceDeduplication.cases;
 
 if (
   mergedBrowserCases.length !==
@@ -450,11 +664,18 @@ if (
   );
 }
 
-const distinctBrowserCases =
-  deduplicatePlannerCases(
-    mergedBrowserCases,
-    "browser"
-  );
+  const browserDeduplication =
+    options.deferBrowserAllocation
+      ? { cases: mergedBrowserCases, removals: [] }
+      : deduplicatePlannerCases(
+          mergedBrowserCases,
+          "browser",
+          options.obligationLedger
+        );
+  const distinctApiCases =
+    apiDeduplication.cases;
+  const distinctBrowserCases =
+    browserDeduplication.cases;
 
   const limitedApiCases =
     distinctApiCases
@@ -470,17 +691,52 @@ const distinctBrowserCases =
       );
 
   const limitedBrowserCases =
-    distinctBrowserCases
-      .slice(0, MAX_BROWSER_CASES)
-      .map(
-        (
-          testCase: any,
-          index: number
-        ) => ({
-          ...testCase,
-          id: `web-${index + 1}`,
-        })
-      );
+    options.deferBrowserAllocation
+      ? distinctBrowserCases
+      : distinctBrowserCases
+          .slice(0, MAX_BROWSER_CASES)
+          .map(
+            (
+              testCase: any,
+              index: number
+            ) => ({
+              ...testCase,
+              id: `web-${index + 1}`,
+            })
+          );
+
+  const capacityRemovals = [
+    ...distinctApiCases
+      .slice(MAX_API_CASES)
+      .map((testCase: any) =>
+        removalAudit(
+          testCase,
+          "api",
+          "REMOVED_CAPACITY_OVERFLOW",
+          options.obligationLedger
+        )
+      ),
+    ...distinctBrowserCases
+      .slice(
+        options.deferBrowserAllocation
+          ? distinctBrowserCases.length
+          : MAX_BROWSER_CASES
+      )
+      .map((testCase: any) =>
+        removalAudit(
+          testCase,
+          "browser",
+          "REMOVED_CAPACITY_OVERFLOW",
+          options.obligationLedger
+        )
+      ),
+  ];
+  const removals = [
+    ...apiDeduplication.removals,
+    ...invoiceDeduplication.removals,
+    ...browserDeduplication.removals,
+    ...capacityRemovals,
+  ];
 
   const originalTotal =
     rawApiCases.length +
@@ -499,6 +755,37 @@ const distinctBrowserCases =
 
   plan.browserCases =
     limitedBrowserCases;
+
+  plan.plannerCaseBudgetAudit = {
+    api: {
+      inputCount: rawApiCases.length,
+      distinctCount:
+        distinctApiCases.length,
+      retainedCount:
+        limitedApiCases.length,
+      overflowCount: Math.max(
+        0,
+        distinctApiCases.length -
+          MAX_API_CASES
+      ),
+    },
+    browser: {
+      inputCount:
+        rawBrowserCases.length,
+      distinctCount:
+        distinctBrowserCases.length,
+      retainedCount:
+        limitedBrowserCases.length,
+      overflowCount: Math.max(
+        0,
+        options.deferBrowserAllocation
+          ? 0
+          : distinctBrowserCases.length -
+            MAX_BROWSER_CASES
+      ),
+    },
+    removals,
+  };
 
   if (removedTotal > 0) {
     const capNote =

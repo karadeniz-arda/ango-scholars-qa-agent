@@ -133,6 +133,19 @@ routes:
     params: []
     area: talent
     persona: talent
+  - path: /talent/assessments
+    file: src/modules/talent/TalentRoutes.tsx
+    params: []
+    area: assessments
+    persona: talent
+    origin: UI_ROUTE_MANIFEST
+    authoritative: true
+    derivation: NESTED_COMPOSITION
+    routeKind: STATIC
+    sourceRef: src/modules/talent/TalentRoutes.tsx:86
+    childRoute: assessments
+    parentRoute: /talent
+    parentSourceRef: src/routes/App.routes.tsx:53
   - path: /talent/assessments/:assessmentId/prepare
     file: src/routes/utils/document-title.utils.ts
     params:

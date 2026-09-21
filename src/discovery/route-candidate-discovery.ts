@@ -1,4 +1,9 @@
 import { findRouteCandidatesFromCatalog } from "./ui-route-catalog.js";
+import type {
+  PlannerRouteEvidenceDisposition,
+  PlannerRouteEvidenceOrigin,
+} from "../planner/types.js";
+import type { SourceBackedSurfaceIdentity } from "./source-surface-provenance.js";
 
 export type RouteConfidence = "high" | "medium" | "low";
 
@@ -6,7 +11,27 @@ export type RouteCandidate = {
   route: string;
   confidence: RouteConfidence;
   source: string;
+  origin?: PlannerRouteEvidenceOrigin;
+  authoritative?: boolean;
+  routeEvidenceDisposition?:
+    PlannerRouteEvidenceDisposition;
+  sourceRef?: string;
+  derivation?:
+    | "DIRECT"
+    | "NESTED_COMPOSITION";
+  routeKind?:
+    | "STATIC"
+    | "PARAMETERIZED";
+  parentRoute?: string;
+  parentSourceRef?: string;
+  surfaceIdentity?: SourceBackedSurfaceIdentity;
   reason: string;
+  /**
+   * Deterministic ranking within one confidence tier.
+   * This is route-grounding metadata, not proof.
+   */
+  groundingScore?: number;
+  evidence?: string[];
 };
 
 const confidenceScore: Record<RouteConfidence, number> = {
@@ -97,6 +122,16 @@ function uniqByRoute(candidates: RouteCandidate[]): RouteCandidate[] {
       confidenceScore[existing.confidence]
     ) {
       seen.set(candidate.route, candidate);
+      continue;
+    }
+
+    if (
+      candidate.confidence ===
+        existing.confidence &&
+      (candidate.groundingScore ?? 0) >
+        (existing.groundingScore ?? 0)
+    ) {
+      seen.set(candidate.route, candidate);
     }
   }
 
@@ -158,10 +193,16 @@ function extractLiteralRoutes(text: string, persona: string): RouteCandidate[] {
 
     candidates.push({
       route,
-      confidence: "high",
-      source: "literal-route",
+      confidence: "medium",
+      source: "planner-literal",
+      origin: "PLANNER_LITERAL",
+      authoritative: false,
+      groundingScore: 50,
+      evidence: [
+        "UNVERIFIED_PLANNER_LITERAL",
+      ],
       reason:
-        "A concrete browser route-like string was found in the current test case context.",
+        "A concrete route-like string was found only in model-produced case context.",
     });
   }
 
@@ -191,6 +232,11 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
       route: "/company/all-jobs",
       confidence: "high",
       source: "feature-area",
+      origin: "DETERMINISTIC_FEATURE_POLICY",
+      groundingScore: 750,
+      evidence: [
+        "EXPLICIT_JOB_CHANGE_REQUEST_SURFACE",
+      ],
       reason:
         "Job change-request flows use the company All Jobs area as the safest known entry point.",
     });
@@ -260,6 +306,7 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
         route: "/company/all-jobs",
         confidence: "medium",
         source: "feature-area",
+        origin: "DETERMINISTIC_FEATURE_POLICY",
         reason:
           "This Work Setups case targets job details/hired/applicants/review context, so company jobs is the safest known entry point.",
       });
@@ -284,6 +331,10 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
         route: "/company/all-work-setups",
         confidence: "high",
         source: "feature-area",
+        groundingScore: 750,
+        evidence: [
+          "EXPLICIT_WORK_SETUP_SURFACE",
+        ],
         reason:
           "This case targets top-level company Work Setups management/list/create/details/permissions UI.",
       });
@@ -300,8 +351,13 @@ function inferFeatureAreaRoutes(testCase: any): RouteCandidate[] {
   ) {
     candidates.push({
       route: "/company/all-jobs",
-      confidence: "medium",
+      confidence: "high",
       source: "feature-area",
+      origin: "DETERMINISTIC_FEATURE_POLICY",
+      groundingScore: 750,
+      evidence: [
+        "EXPLICIT_JOBS_LIST_SURFACE",
+      ],
       reason: "Context points to company jobs list area.",
     });
   }
@@ -388,13 +444,18 @@ export function discoverBrowserRouteCandidates(
   const persona = String(testCase?.persona || "");
 
   const candidates = [
-    ...findRouteCandidatesFromCatalog(plan, testCase),
     ...extractLiteralRoutes(caseText, persona),
     ...inferFeatureAreaRoutes(testCase),
+    ...findRouteCandidatesFromCatalog(plan, testCase),
   ];
 
   return uniqByRoute(candidates).sort(
-    (a, b) => confidenceScore[b.confidence] - confidenceScore[a.confidence]
+    (a, b) =>
+      confidenceScore[b.confidence] -
+        confidenceScore[a.confidence] ||
+      (b.groundingScore ?? 0) -
+        (a.groundingScore ?? 0) ||
+      a.route.localeCompare(b.route)
   );
 }
 
@@ -404,10 +465,25 @@ export function getBestDiscoveredBrowserRoute(
 ): RouteCandidate | undefined {
   const candidates = discoverBrowserRouteCandidates(plan, testCase);
   const persona = String(testCase?.persona || "");
+  const sourceGrounded = candidates.filter((candidate) =>
+    candidate.confidence === "high" &&
+    candidate.evidence?.includes("SOURCE_SURFACE_PROVENANCE") &&
+    routeMatchesPersona(candidate.route, persona)
+  );
+
+  /*
+   * Source-backed surface matches are a distinct grounding class. If more
+   * than one independently sourced route claims the requested surface, do
+   * not let lexical scoring select one of them by accident. Include
+   * parameterized matches here even though they are not concrete start
+   * routes, so a generic fallback cannot hide source ambiguity.
+   */
+  if (sourceGrounded.length > 1) return undefined;
+
   const needsDeepContext = requiresDeepUiContext(testCase);
 
-  return candidates.find((candidate) => {
-    if (candidate.confidence === "low") return false;
+  const eligible = candidates.filter((candidate) => {
+    if (candidate.confidence !== "high") return false;
     if (!isConcreteExecutableRoute(candidate.route)) return false;
     if (!routeMatchesPersona(candidate.route, persona)) return false;
 
@@ -421,4 +497,28 @@ export function getBestDiscoveredBrowserRoute(
 
     return true;
   });
+
+  if (sourceGrounded.length === 1) {
+    return eligible.find((candidate) =>
+      candidate.route === sourceGrounded[0]!.route
+    );
+  }
+
+  const bestScore = eligible.reduce(
+    (best, candidate) =>
+      Math.max(
+        best,
+        candidate.groundingScore ?? 0
+      ),
+    Number.NEGATIVE_INFINITY
+  );
+  const bestCandidates = eligible.filter(
+    (candidate) =>
+      (candidate.groundingScore ?? 0) ===
+      bestScore
+  );
+
+  return bestCandidates.length === 1
+    ? bestCandidates[0]
+    : undefined;
 }

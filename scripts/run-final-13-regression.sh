@@ -16,6 +16,10 @@ SMOKE_TIMEOUT_SECONDS="${QA_SMOKE_TIMEOUT_SECONDS:-1800}"
 RESUME_ENABLED="${QA_REGRESSION_RESUME:-true}"
 
 PLAN_MODE="${QA_REGRESSION_PLAN_MODE:-fresh}"
+LEGACY_PLAN_ADMISSION=false
+if [[ "$PLAN_MODE" == "canonical" ]]; then
+  LEGACY_PLAN_ADMISSION=true
+fi
 CANONICAL_PLAN_DIR="${QA_REGRESSION_CANONICAL_PLAN_DIR:-fixtures/regression/final-13/plans}"
 CANONICAL_HASH_FILE="${QA_REGRESSION_CANONICAL_HASH_FILE:-fixtures/regression/final-13/plans.sha256}"
 
@@ -50,6 +54,7 @@ HAD_PLAN=false
 HAD_REPORT=false
 HAD_EVIDENCE=false
 HAD_VIDEOS=false
+HAD_USEFULNESS_SUMMARY=false
 
 if [[ -f qa-results/test-plan.json ]]; then
   cp qa-results/test-plan.json \
@@ -73,6 +78,12 @@ if [[ -d qa-results/videos ]]; then
   cp -R qa-results/videos \
     "$RESTORE_DIR/videos"
   HAD_VIDEOS=true
+fi
+
+if [[ -f qa-results/generic-browser-usefulness-run-summary.json ]]; then
+  cp qa-results/generic-browser-usefulness-run-summary.json \
+    "$RESTORE_DIR/generic-browser-usefulness-run-summary.json"
+  HAD_USEFULNESS_SUMMARY=true
 fi
 
 restore_files() {
@@ -101,6 +112,13 @@ restore_files() {
   if [[ "$HAD_VIDEOS" == "true" ]]; then
     cp -R "$RESTORE_DIR/videos" \
       qa-results/videos
+  fi
+
+  rm -f qa-results/generic-browser-usefulness-run-summary.json
+
+  if [[ "$HAD_USEFULNESS_SUMMARY" == "true" ]]; then
+    cp "$RESTORE_DIR/generic-browser-usefulness-run-summary.json" \
+      qa-results/generic-browser-usefulness-run-summary.json
   fi
 
   rm -rf "$RESTORE_DIR"
@@ -304,6 +322,16 @@ fi
 for ISSUE in "${ISSUES[@]}"; do
   ISSUE_DIR="$RUN_DIR/$ISSUE"
 
+# Controlled Work Setup fixture provisioning is enabled
+# only for canonical cases backed by the owned lifecycle.
+FIXTURE_PROVISIONING_ENABLED=false
+
+case "$ISSUE" in
+AS-1165|AS-1190)
+FIXTURE_PROVISIONING_ENABLED=true
+;;
+esac
+
   mkdir -p "$ISSUE_DIR"
 
   if status_row_is_complete "$ISSUE"; then
@@ -319,6 +347,7 @@ for ISSUE in "${ISSUES[@]}"; do
   rm -f qa-results/report.md
   rm -rf qa-results/evidence
   rm -rf qa-results/videos
+  rm -f qa-results/generic-browser-usefulness-run-summary.json
 
   PLAN_STATUS=99
   SMOKE_STATUS=99
@@ -370,15 +399,27 @@ for ISSUE in "${ISSUES[@]}"; do
       env \
         QA_EVIDENCE_REVIEW=true \
         QA_ALLOW_API_MUTATIONS=false \
-        QA_ALLOW_BROWSER_MUTATIONS=false \
-        QA_ALLOW_BROWSER_EDIT_FLOWS=false \
-        QA_ALLOW_BROWSER_FIXTURE_PROVISIONING=false \
+        QA_ALLOW_BROWSER_MUTATIONS="${QA_ALLOW_BROWSER_MUTATIONS:-false}" \
+        QA_ALLOW_BROWSER_EDIT_FLOWS="${QA_ALLOW_BROWSER_EDIT_FLOWS:-false}" \
+        QA_ALLOW_BROWSER_FIXTURE_PROVISIONING="$FIXTURE_PROVISIONING_ENABLED" \
         QA_REQUIRE_FIXTURE_CLEANUP=true \
         QA_BROWSER_MUTATION_PREFLIGHT=false \
+        QA_ALLOW_LEGACY_UNCOMPILED_PLAN="$LEGACY_PLAN_ADMISSION" \
         npm run smoke -- --issue "$ISSUE" \
       2>&1 | tee "$ISSUE_DIR/smoke.log"
 
     SMOKE_STATUS=${PIPESTATUS[0]}
+
+    # P4_AUTONOMOUS_USEFULNESS_ARTIFACT_RETENTION_V1
+    #
+    # Output retention only. This does not participate in
+    # proposal generation, safety, execution, proof, or verdict.
+    rm -f "$ISSUE_DIR/generic-browser-usefulness-run-summary.json"
+
+    if [[ -f qa-results/generic-browser-usefulness-run-summary.json ]]; then
+      cp qa-results/generic-browser-usefulness-run-summary.json \
+        "$ISSUE_DIR/generic-browser-usefulness-run-summary.json"
+    fi
 
     rm -rf "$ISSUE_DIR/evidence"
     rm -rf "$ISSUE_DIR/videos"
@@ -414,13 +455,199 @@ echo "===== FINAL 13 REGRESSION GUARD ====="
 
 RUN_DIR="$RUN_DIR" \
 TS_STATUS="$TS_STATUS" \
+REGRESSION_PLAN_MODE="$PLAN_MODE" \
+CANONICAL_HASH_FILE="$CANONICAL_HASH_FILE" \
+EFFECTIVE_EVIDENCE_REVIEW="true" \
+EFFECTIVE_API_MUTATIONS_ALLOWED="false" \
+EFFECTIVE_BROWSER_MUTATIONS_ALLOWED="${QA_ALLOW_BROWSER_MUTATIONS:-false}" \
+EFFECTIVE_BROWSER_EDIT_FLOWS_ALLOWED="${QA_ALLOW_BROWSER_EDIT_FLOWS:-false}" \
+EFFECTIVE_REQUIRE_FIXTURE_CLEANUP="true" \
+EFFECTIVE_BROWSER_MUTATION_PREFLIGHT="false" \
+FIXTURE_PROVISIONING_ENABLED_ISSUES_CSV="AS-1165,AS-1190" \
+GENERIC_BROWSER_SHADOW_RUNNER_OVERRIDE="${QA_GENERIC_BROWSER_SHADOW-}" \
+GENERIC_BROWSER_READONLY_RUNNER_OVERRIDE="${QA_GENERIC_BROWSER_READONLY_EXECUTION-}" \
+GENERIC_BROWSER_MODEL_RUNNER_OVERRIDE="${QA_GENERIC_BROWSER_MODEL-}" \
+OLLAMA_MODEL_RUNNER_OVERRIDE="${OLLAMA_MODEL-}" \
 node --input-type=module <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const runDir = process.env.RUN_DIR;
 const tsStatus =
   Number(process.env.TS_STATUS || "1");
+
+/*
+ * FINAL_13_EXECUTION_PROFILE_V1
+ *
+ * Capture only execution facts this runner can prove.
+ *
+ * Generic-browser/model configuration can also be resolved later
+ * inside the smoke process from application environment loading.
+ * When this outer runner did not explicitly provide an override,
+ * record that value as not captured rather than guessing.
+ */
+function parseStrictBoolean(value) {
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return null;
+}
+
+function captureRunnerBooleanOverride(
+  value
+) {
+  const parsed =
+    parseStrictBoolean(value);
+
+  return {
+    value: parsed,
+    resolution:
+      parsed === null
+        ? "not_captured"
+        : "runner_override",
+  };
+}
+
+function sha256File(filePath) {
+  if (
+    !filePath ||
+    !fs.existsSync(filePath)
+  ) {
+    return null;
+  }
+
+  return crypto
+    .createHash("sha256")
+    .update(
+      fs.readFileSync(filePath)
+    )
+    .digest("hex");
+}
+
+const genericBrowserModelOverride =
+  String(
+    process.env
+      .GENERIC_BROWSER_MODEL_RUNNER_OVERRIDE ||
+    ""
+  ).trim();
+
+const ollamaModelOverride =
+  String(
+    process.env
+      .OLLAMA_MODEL_RUNNER_OVERRIDE ||
+    ""
+  ).trim();
+
+const executionProfile = {
+  schemaVersion: 1,
+
+  plan: {
+    mode:
+      String(
+        process.env.REGRESSION_PLAN_MODE ||
+        ""
+      )
+        .trim()
+        .toLowerCase(),
+
+    canonicalHashFile:
+      process.env.CANONICAL_HASH_FILE ||
+      null,
+
+    canonicalHashManifestSha256:
+      sha256File(
+        process.env.CANONICAL_HASH_FILE
+      ),
+  },
+
+  runnerPolicy: {
+    evidenceReview:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_EVIDENCE_REVIEW
+      ),
+
+    apiMutationsAllowed:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_API_MUTATIONS_ALLOWED
+      ),
+
+    browserMutationsAllowed:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_BROWSER_MUTATIONS_ALLOWED
+      ),
+
+    browserEditFlowsAllowed:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_BROWSER_EDIT_FLOWS_ALLOWED
+      ),
+
+    requireFixtureCleanup:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_REQUIRE_FIXTURE_CLEANUP
+      ),
+
+    browserMutationPreflight:
+      parseStrictBoolean(
+        process.env
+          .EFFECTIVE_BROWSER_MUTATION_PREFLIGHT
+      ),
+
+    fixtureProvisioning: {
+      mode: "issue_allowlist",
+
+      enabledIssues:
+        String(
+          process.env
+            .FIXTURE_PROVISIONING_ENABLED_ISSUES_CSV ||
+          ""
+        )
+          .split(",")
+          .map(
+            (value) => value.trim()
+          )
+          .filter(Boolean),
+    },
+  },
+
+  runtimeResolvedOutsideRunner: {
+    genericBrowserShadow:
+      captureRunnerBooleanOverride(
+        process.env
+          .GENERIC_BROWSER_SHADOW_RUNNER_OVERRIDE
+      ),
+
+    genericBrowserReadOnlyExecution:
+      captureRunnerBooleanOverride(
+        process.env
+          .GENERIC_BROWSER_READONLY_RUNNER_OVERRIDE
+      ),
+
+    genericBrowserModel: {
+      value:
+        genericBrowserModelOverride ||
+        ollamaModelOverride ||
+        null,
+
+      resolution:
+        genericBrowserModelOverride
+          ? "qa_generic_browser_model_runner_override"
+          : ollamaModelOverride
+            ? "ollama_model_runner_override"
+            : "not_captured",
+    },
+  },
+};
 
 if (!runDir) {
   throw new Error("RUN_DIR eksik.");
@@ -484,8 +711,522 @@ const totals = {
 
 const failures = [];
 const productFindings = [];
+const deterministicFindings = [];
+const behaviorProofRequirements = [];
+const urlTransitionProofParityAudits = [];
+const selectedStateProofParityAudits = [];
 const agentRegressions = [];
 const unclassifiedFailures = [];
+
+/*
+ * CANONICAL_BROWSER_PASS_FLOOR_V1
+ *
+ * Aggregate PASS totals are not a regression oracle.
+ *
+ * A canonical browser case that previously produced PASS
+ * must remain PASS in later canonical runs. A newly gained
+ * PASS cannot compensate for losing an established PASS.
+ *
+ * Keep this migration floor separate from agentRegressions:
+ * that existing collection classifies final FAIL findings,
+ * while this collection compares per-case verdict history.
+ */
+const finalBrowserResults = [];
+const browserExecutionLogsByIssue = new Map();
+
+const baselinePassPreserved = [];
+const baselinePassNonComparable = [];
+const baselinePassRegressions = [];
+const coverageGains = [];
+
+/*
+ * CANONICAL_BROWSER_VERDICT_SNAPSHOT_V1
+ *
+ * Preserve the complete canonical browser verdict snapshot
+ * so non-PASS status movement can be audited separately
+ * from the hard historical PASS floor.
+ *
+ * PASS -> non-PASS remains a regression and is already
+ * enforced by the PASS floor.
+ *
+ * non-PASS -> PASS is a coverage gain.
+ *
+ * non-PASS -> different non-PASS is informational
+ * STATUS_RECLASSIFIED evidence, not automatically a guard
+ * failure because safer classification may be intentional.
+ */
+const baselineUnchangedNonPass = [];
+const baselineStatusReclassifications = [];
+const baselineVerdictMissing = [];
+
+const canonicalPlanMode =
+  String(
+    process.env.QA_REGRESSION_PLAN_MODE ||
+      ""
+  )
+    .trim()
+    .toLowerCase() === "canonical";
+
+const browserPassBaselinePath =
+  path.join(
+    "fixtures",
+    "regression",
+    "final-13",
+    "browser-pass-baseline.json"
+  );
+
+let browserPassBaseline = null;
+
+if (canonicalPlanMode) {
+  try {
+    if (
+      !fs.existsSync(
+        browserPassBaselinePath
+      )
+    ) {
+      throw new Error(
+        "baseline manifest is missing"
+      );
+    }
+
+    const parsedBaseline =
+      JSON.parse(
+        fs.readFileSync(
+          browserPassBaselinePath,
+          "utf8"
+        )
+      );
+
+    if (
+      parsedBaseline?.schemaVersion !== 1 ||
+      !Array.isArray(
+        parsedBaseline?.browserPassCases
+      )
+    ) {
+      throw new Error(
+        "baseline manifest has an unsupported shape"
+      );
+    }
+
+    browserPassBaseline =
+      parsedBaseline;
+  } catch (error) {
+    failures.push(
+      `Canonical browser PASS baseline could not be loaded: ` +
+        `${String(
+          error?.message || error
+        )}`
+    );
+  }
+}
+
+/*
+ * FINAL_13_CASE_AWARE_COMPARABILITY_V1
+ *
+ * Historical PASS is a regression oracle only when the
+ * dimensions that actually mattered to that historical PASS
+ * are comparable.
+ *
+ * Irrelevant run-profile differences must not discard otherwise
+ * valid coverage. Conversely, unknown required dimensions fail
+ * closed into NON_COMPARABLE rather than being guessed.
+ */
+function resolvedHistoricalProfileFact(
+  fact
+) {
+  if (
+    !fact ||
+    typeof fact !== "object"
+  ) {
+    return {
+      known: false,
+      value: null,
+      resolution: "missing",
+    };
+  }
+
+  const resolution =
+    String(
+      fact.resolution || ""
+    ).trim();
+
+  const value = fact.value;
+
+  const known =
+    value !== null &&
+    value !== undefined &&
+    resolution !== "unknown" &&
+    resolution !== "not_captured";
+
+  return {
+    known,
+    value:
+      known
+        ? value
+        : null,
+    resolution:
+      resolution || "missing",
+  };
+}
+
+function resolvedCurrentRunnerOverride(
+  fact
+) {
+  if (
+    !fact ||
+    typeof fact !== "object"
+  ) {
+    return {
+      known: false,
+      value: null,
+      resolution: "missing",
+    };
+  }
+
+  const resolution =
+    String(
+      fact.resolution || ""
+    ).trim();
+
+  const known =
+    typeof fact.value === "boolean" &&
+    resolution === "runner_override";
+
+  return {
+    known,
+    value:
+      known
+        ? fact.value
+        : null,
+    resolution:
+      resolution || "missing",
+  };
+}
+
+function classifyBaselinePassComparability(
+  issue,
+  caseId
+) {
+  const baselineProfile =
+    browserPassBaseline
+      ?.executionProfile;
+
+  const baselinePlanHash =
+    resolvedHistoricalProfileFact(
+      baselineProfile
+        ?.canonicalPlanManifestSha256
+    );
+
+  const currentPlanHash =
+    executionProfile
+      ?.plan
+      ?.canonicalHashManifestSha256 ||
+    null;
+
+  if (
+    !baselinePlanHash.known ||
+    !currentPlanHash
+  ) {
+    return {
+      comparable: false,
+      classification:
+        "NON_COMPARABLE_PLAN",
+      reasons: [
+        "Canonical plan identity is not known on both sides.",
+      ],
+    };
+  }
+
+  if (
+    baselinePlanHash.value !==
+    currentPlanHash
+  ) {
+    return {
+      comparable: false,
+      classification:
+        "NON_COMPARABLE_PLAN",
+      reasons: [
+        "Canonical plan manifest fingerprint differs from the historical baseline.",
+      ],
+    };
+  }
+
+  const baselineCase =
+    browserPassBaseline
+      ?.browserPassCases
+      ?.find(
+        (candidate) =>
+          candidate?.issue === issue &&
+          candidate?.caseId === caseId
+      );
+
+  const dependencies =
+    baselineCase
+      ?.comparisonDependencies
+      ?.requiredProfileDimensions;
+
+  if (!Array.isArray(dependencies)) {
+    return {
+      comparable: false,
+      classification:
+        "NON_COMPARABLE_EXECUTION_PROFILE",
+      reasons: [
+        "Historical PASS comparison dependency metadata is missing.",
+      ],
+    };
+  }
+
+  const reasons = [];
+
+  for (const dependency of dependencies) {
+    if (
+      dependency ===
+      "browserMutationsAllowed"
+    ) {
+      const baselineMutationPolicy =
+        resolvedHistoricalProfileFact(
+          baselineProfile
+            ?.browserMutationsAllowed
+        );
+
+      const currentMutationPolicy =
+        executionProfile
+          ?.runnerPolicy
+          ?.browserMutationsAllowed;
+
+      if (
+        !baselineMutationPolicy.known ||
+        typeof currentMutationPolicy !==
+          "boolean"
+      ) {
+        reasons.push(
+          "Required browser mutation policy is not known on both sides."
+        );
+
+        continue;
+      }
+
+      if (
+        baselineMutationPolicy.value !==
+        currentMutationPolicy
+      ) {
+        reasons.push(
+          `browserMutationsAllowed differs: ` +
+            `baseline=${baselineMutationPolicy.value}, ` +
+            `current=${currentMutationPolicy}.`
+        );
+      }
+
+      continue;
+    }
+
+    if (
+      dependency ===
+      "genericBrowserHandoffProfile"
+    ) {
+      const baselineShadow =
+        resolvedHistoricalProfileFact(
+          baselineProfile
+            ?.genericBrowserShadow
+        );
+
+      const baselineReadOnly =
+        resolvedHistoricalProfileFact(
+          baselineProfile
+            ?.genericBrowserReadOnlyExecution
+        );
+
+      const currentShadow =
+        resolvedCurrentRunnerOverride(
+          executionProfile
+            ?.runtimeResolvedOutsideRunner
+            ?.genericBrowserShadow
+        );
+
+      const currentReadOnly =
+        resolvedCurrentRunnerOverride(
+          executionProfile
+            ?.runtimeResolvedOutsideRunner
+            ?.genericBrowserReadOnlyExecution
+        );
+
+      if (
+        !baselineShadow.known ||
+        !baselineReadOnly.known ||
+        !currentShadow.known ||
+        !currentReadOnly.known
+      ) {
+        reasons.push(
+          "Required generic-browser handoff profile is not known on both sides."
+        );
+
+        continue;
+      }
+
+      if (
+        baselineShadow.value !==
+          currentShadow.value ||
+        baselineReadOnly.value !==
+          currentReadOnly.value
+      ) {
+        reasons.push(
+          `genericBrowserHandoffProfile differs: ` +
+            `baseline=(shadow=${baselineShadow.value}, ` +
+            `readOnly=${baselineReadOnly.value}), ` +
+            `current=(shadow=${currentShadow.value}, ` +
+            `readOnly=${currentReadOnly.value}).`
+        );
+      }
+
+      continue;
+    }
+
+    reasons.push(
+      `Unsupported comparison dependency "${dependency}".`
+    );
+  }
+
+  if (reasons.length > 0) {
+    return {
+      comparable: false,
+      classification:
+        "NON_COMPARABLE_EXECUTION_PROFILE",
+      reasons,
+    };
+  }
+
+  return {
+    comparable: true,
+    classification: "COMPARABLE",
+    reasons: [],
+  };
+}
+
+/*
+ * FINAL_13_ENVIRONMENT_COMPARABILITY_V1
+ *
+ * Environment non-comparability is intentionally narrow.
+ *
+ * A historical PASS is excluded for environment reasons only when:
+ *
+ * 1. the current final status is BLOCKED,
+ * 2. the same case's runtime route-discovery segment contains a
+ *    prerequisite GET that failed with HTTP 5xx, and
+ * 3. route discovery for that same case was exhausted.
+ *
+ * Plain route mismatch, fixture unavailability, mutation guards,
+ * generic-agent refusal, deterministic FAIL, and product findings
+ * are not classified as environment failures here.
+ */
+function classifyBaselinePassEnvironmentComparability(
+  issue,
+  caseId,
+  currentStatus
+) {
+  if (currentStatus !== "BLOCKED") {
+    return {
+      comparable: true,
+      classification: "COMPARABLE",
+      reasons: [],
+    };
+  }
+
+  const log =
+    browserExecutionLogsByIssue.get(
+      issue
+    ) || "";
+
+  const caseStartMarker =
+    `Browser runtime handoff attached to ` +
+    `${caseId} `;
+
+  const start =
+    log.indexOf(caseStartMarker);
+
+  if (start < 0) {
+    return {
+      comparable: true,
+      classification: "COMPARABLE",
+      reasons: [],
+    };
+  }
+
+  const possibleEnds = [
+    log.indexOf(
+      "\nBrowser runtime handoff attached to ",
+      start + caseStartMarker.length
+    ),
+
+    log.indexOf(
+      "\nBrowser execution starts",
+      start + caseStartMarker.length
+    ),
+  ].filter(
+    (value) => value >= 0
+  );
+
+  const end =
+    possibleEnds.length > 0
+      ? Math.min(...possibleEnds)
+      : log.length;
+
+  const segment =
+    log.slice(start, end);
+
+  if (
+    !segment.includes(
+      `Runtime browser route discovery exhausted ` +
+        `for ${caseId}.`
+    )
+  ) {
+    return {
+      comparable: true,
+      classification: "COMPARABLE",
+      reasons: [],
+    };
+  }
+
+  const upstreamServerFailures =
+    Array.from(
+      segment.matchAll(
+        /Browser route resolver GET failed\s+(\d{3}):\s+([^\s]+)/g
+      )
+    )
+      .map((match) => ({
+        status:
+          Number(match[1]),
+        resource:
+          match[2],
+      }))
+      .filter(
+        (failure) =>
+          failure.status >= 500 &&
+          failure.status <= 599
+      );
+
+  if (
+    upstreamServerFailures.length === 0
+  ) {
+    return {
+      comparable: true,
+      classification: "COMPARABLE",
+      reasons: [],
+    };
+  }
+
+  return {
+    comparable: false,
+    classification:
+      "NON_COMPARABLE_ENVIRONMENT",
+    reasons:
+      upstreamServerFailures.map(
+        (failure) =>
+          `Upstream prerequisite GET failed ` +
+          `with HTTP ${failure.status}: ` +
+          `${failure.resource}`
+      ),
+  };
+}
 
 function increment(bucket, status) {
   if (
@@ -557,6 +1298,39 @@ function getApiCaseStatus(
   return match?.[1] || "UNKNOWN";
 }
 
+function getRetainedDeterministicFailureCaseIds(
+  log
+) {
+  const retainedCaseIds = new Set();
+  let currentReviewCaseId;
+
+  for (const line of log.split(/\r?\n/)) {
+    const reviewMatch =
+      line.match(
+        /Evidence review:\s+\[([^\]]+)\]\s+[A-Z_]+\s+\([^)]+\)/
+      );
+
+    if (reviewMatch) {
+      currentReviewCaseId =
+        reviewMatch[1];
+      continue;
+    }
+
+    if (
+      currentReviewCaseId &&
+      /Evidence reconciliation audit:\s+raw=FAIL,\s+final=FAIL,\s+decision=RETAIN_DETERMINISTIC_FAIL\b/.test(
+        line
+      )
+    ) {
+      retainedCaseIds.add(
+        currentReviewCaseId
+      );
+    }
+  }
+
+  return retainedCaseIds;
+}
+
 for (const row of rows) {
   const issueDir =
     path.join(runDir, row.issue);
@@ -571,6 +1345,53 @@ for (const row of rows) {
     fs.existsSync(logPath)
       ? fs.readFileSync(logPath, "utf8")
       : "";
+
+browserExecutionLogsByIssue.set(
+  row.issue,
+  log
+);
+
+/*
+ * P5_PASS_TRUST_BEHAVIOR_PROOF_AUDIT_WIRING_V1
+ *
+ * Reporting/observability only. Preserve the structured
+ * behavior-proof reconciliation audits already emitted by
+ * the browser runner so the final regression summary does
+ * not incorrectly imply that no behavior requirements were
+ * observed.
+ *
+ * This does not participate in execution, proof, evidence
+ * reconciliation, or final verdict selection.
+ */
+for (
+  const audit of
+  getBehaviorProofRequirementAudits(log)
+) {
+  behaviorProofRequirements.push({
+    issue: row.issue,
+    ...audit,
+  });
+}
+
+for (
+  const audit of
+  getUrlTransitionProofParityAudits(log)
+) {
+  urlTransitionProofParityAudits.push({
+    issue: row.issue,
+    ...audit,
+  });
+}
+
+for (
+  const audit of
+  getSelectedStateProofParityAudits(log)
+) {
+  selectedStateProofParityAudits.push({
+    issue: row.issue,
+    ...audit,
+  });
+}
 
   const apiSection =
     log.split(
@@ -599,6 +1420,17 @@ for (const row of rows) {
       (result) => result.status
     );
 
+  for (
+    const finalResult of
+    browserFinalResults
+  ) {
+    finalBrowserResults.push({
+      issue: row.issue,
+      caseId: finalResult.caseId,
+      status: finalResult.status,
+    });
+  }
+
   const evidenceReviewsByCase =
     new Map();
 
@@ -621,6 +1453,11 @@ for (const row of rows) {
       reviews
     );
   }
+
+  const retainedDeterministicFailureCaseIds =
+    getRetainedDeterministicFailureCaseIds(
+      log
+    );
 
   const browserCaseBlocks =
     Array.from(
@@ -802,6 +1639,16 @@ for (const row of rows) {
       continue;
     }
 
+    if (
+      retainedDeterministicFailureCaseIds
+        .has(finalResult.caseId)
+    ) {
+      deterministicFindings.push(
+        `${finding}; deterministic failure retained`
+      );
+      continue;
+    }
+
     if (latestReview) {
       agentRegressions.push(finding);
       failures.push(finding);
@@ -819,19 +1666,6 @@ for (const row of rows) {
     failures.push(
       `${row.issue}: runtime ERROR`
     );
-  }
-
-  if (row.issue === "AS-1073") {
-    if (
-      getApiCaseStatus(
-        apiSection,
-        "api-1"
-      ) === "PASS"
-    ) {
-      failures.push(
-        "AS-1073: unsupported API PASS"
-      );
-    }
   }
 
   if (row.issue === "AS-1196") {
@@ -904,6 +1738,582 @@ for (const row of rows) {
       );
     }
   }
+}
+
+/*
+ * Evaluate the historical canonical PASS floor only after
+ * all issue logs have been parsed.
+ */
+if (
+  canonicalPlanMode &&
+  browserPassBaseline
+) {
+  const currentByKey =
+    new Map();
+
+  for (
+    const result of
+    finalBrowserResults
+  ) {
+    currentByKey.set(
+      `${result.issue}::${result.caseId}`,
+      result.status
+    );
+  }
+
+  const baselineKeys =
+    new Set();
+
+  for (
+    const baselineCase of
+    browserPassBaseline.browserPassCases
+  ) {
+    const issue =
+      String(
+        baselineCase?.issue || ""
+      ).trim();
+
+    const caseId =
+      String(
+        baselineCase?.caseId || ""
+      ).trim();
+
+    if (!issue || !caseId) {
+      failures.push(
+        "Canonical browser PASS baseline contains " +
+          "an entry without issue/caseId"
+      );
+      continue;
+    }
+
+    const key =
+      `${issue}::${caseId}`;
+
+    if (baselineKeys.has(key)) {
+      failures.push(
+        `Canonical browser PASS baseline contains ` +
+          `duplicate entry ${issue} [${caseId}]`
+      );
+      continue;
+    }
+
+    baselineKeys.add(key);
+
+    const currentStatus =
+      currentByKey.get(key) ||
+      "MISSING";
+
+    const audit = {
+      issue,
+      caseId,
+      baselineStatus: "PASS",
+      currentStatus,
+    };
+
+    const comparability =
+      classifyBaselinePassComparability(
+        issue,
+        caseId
+      );
+
+    if (!comparability.comparable) {
+      baselinePassNonComparable.push({
+        ...audit,
+        classification:
+          comparability.classification,
+        reasons:
+          comparability.reasons,
+      });
+
+      continue;
+    }
+
+    const environmentComparability =
+      classifyBaselinePassEnvironmentComparability(
+        issue,
+        caseId,
+        currentStatus
+      );
+
+    if (!environmentComparability.comparable) {
+      baselinePassNonComparable.push({
+        ...audit,
+        classification:
+          environmentComparability
+            .classification,
+        reasons:
+          environmentComparability
+            .reasons,
+      });
+
+      continue;
+    }
+
+    if (currentStatus === "PASS") {
+      baselinePassPreserved.push({
+        ...audit,
+        classification: "PRESERVED",
+      });
+
+      continue;
+    }
+
+    baselinePassRegressions.push({
+      ...audit,
+      classification: "REGRESSION",
+    });
+
+    failures.push(
+      `Baseline PASS regression: ` +
+        `${issue} [${caseId}] ` +
+        `PASS -> ${currentStatus}`
+    );
+  }
+
+  for (
+    const result of
+    finalBrowserResults
+  ) {
+    if (result.status !== "PASS") {
+      continue;
+    }
+
+    const key =
+      `${result.issue}::${result.caseId}`;
+
+    if (baselineKeys.has(key)) {
+      continue;
+    }
+
+    coverageGains.push({
+      issue: result.issue,
+      caseId: result.caseId,
+      baselineStatus: null,
+      currentStatus: "PASS",
+      classification: "GAIN",
+    });
+  }
+}
+
+/*
+ * Audit non-PASS baseline movement independently from the
+ * hard PASS regression floor.
+ */
+if (
+  canonicalPlanMode &&
+  browserPassBaseline
+) {
+  const allowedStatuses =
+    new Set([
+      "PASS",
+      "FAIL",
+      "BLOCKED",
+      "MANUAL_REQUIRED",
+      "ERROR",
+    ]);
+
+  const baselineCaseStatuses =
+    browserPassBaseline
+      .browserCaseStatuses;
+
+  if (
+    !Array.isArray(
+      baselineCaseStatuses
+    )
+  ) {
+    failures.push(
+      "Canonical browser verdict snapshot is missing " +
+        "browserCaseStatuses"
+    );
+  } else {
+    const currentByKey =
+      new Map();
+
+    for (
+      const result of
+      finalBrowserResults
+    ) {
+      currentByKey.set(
+        `${result.issue}::${result.caseId}`,
+        result.status
+      );
+    }
+
+    const snapshotByKey =
+      new Map();
+
+    for (
+      const baselineCase of
+      baselineCaseStatuses
+    ) {
+      const issue =
+        String(
+          baselineCase?.issue || ""
+        ).trim();
+
+      const caseId =
+        String(
+          baselineCase?.caseId || ""
+        ).trim();
+
+      const baselineStatus =
+        String(
+          baselineCase?.status || ""
+        )
+          .trim()
+          .toUpperCase();
+
+      if (
+        !issue ||
+        !caseId ||
+        !allowedStatuses.has(
+          baselineStatus
+        )
+      ) {
+        failures.push(
+          "Canonical browser verdict snapshot " +
+            "contains an invalid entry"
+        );
+
+        continue;
+      }
+
+      const key =
+        `${issue}::${caseId}`;
+
+      if (snapshotByKey.has(key)) {
+        failures.push(
+          `Canonical browser verdict snapshot ` +
+            `contains duplicate entry ` +
+            `${issue} [${caseId}]`
+        );
+
+        continue;
+      }
+
+      snapshotByKey.set(
+        key,
+        baselineStatus
+      );
+
+      /*
+       * Historical PASS cases are evaluated by the stronger
+       * PASS-floor guard above. Avoid double-classifying
+       * those cases here.
+       */
+      if (baselineStatus === "PASS") {
+        continue;
+      }
+
+      const currentStatus =
+        currentByKey.get(key) ||
+        "MISSING";
+
+      const audit = {
+        issue,
+        caseId,
+        baselineStatus,
+        currentStatus,
+      };
+
+      if (currentStatus === "MISSING") {
+        baselineVerdictMissing.push({
+          ...audit,
+          classification: "MISSING",
+        });
+
+        failures.push(
+          `Baseline browser verdict missing: ` +
+            `${issue} [${caseId}] ` +
+            `expected ${baselineStatus}`
+        );
+
+        continue;
+      }
+
+      /*
+       * A non-PASS baseline becoming PASS is already
+       * represented by coverageGains.
+       */
+      if (currentStatus === "PASS") {
+        continue;
+      }
+
+      if (
+        currentStatus ===
+        baselineStatus
+      ) {
+        baselineUnchangedNonPass.push({
+          ...audit,
+          classification: "UNCHANGED",
+        });
+
+        continue;
+      }
+
+      baselineStatusReclassifications.push({
+        ...audit,
+        classification:
+          "STATUS_RECLASSIFIED",
+      });
+    }
+
+    /*
+     * The explicit PASS floor and the complete verdict
+     * snapshot must agree about every historical PASS.
+     */
+    for (
+      const passCase of
+      browserPassBaseline
+        .browserPassCases
+    ) {
+      const issue =
+        String(
+          passCase?.issue || ""
+        ).trim();
+
+      const caseId =
+        String(
+          passCase?.caseId || ""
+        ).trim();
+
+      const snapshotStatus =
+        snapshotByKey.get(
+          `${issue}::${caseId}`
+        );
+
+      if (snapshotStatus !== "PASS") {
+        failures.push(
+          `Canonical browser baseline disagreement: ` +
+            `${issue} [${caseId}] is PASS in the ` +
+            `PASS floor but ${snapshotStatus || "MISSING"} ` +
+            `in the verdict snapshot`
+        );
+      }
+    }
+  }
+}
+
+
+function getBehaviorProofRequirementAudits(
+  log
+) {
+  const audits = [];
+
+  for (const line of log.split(/\r?\n/)) {
+    if (
+      !line.includes(
+        "decision=BEHAVIOR_PROOF_REQUIREMENT_PRESENT"
+      )
+    ) {
+      continue;
+    }
+
+    const caseMatch =
+      line.match(
+        /\bcaseId=([^,]+)/
+      );
+
+    const claimsMatch =
+      line.match(
+        /behaviorClaims=(\[.*\]),\s+legacyAcceptanceCoverageGapDetected=/
+      );
+
+    const legacyGapMatch =
+      line.match(
+        /legacyAcceptanceCoverageGapDetected=(true|false)\b/
+      );
+
+    if (
+      !caseMatch ||
+      !claimsMatch ||
+      !legacyGapMatch
+    ) {
+      continue;
+    }
+
+    let behaviorClaims = [];
+
+    try {
+      const parsed =
+        JSON.parse(claimsMatch[1]);
+
+      behaviorClaims =
+        Array.isArray(parsed)
+          ? parsed
+          : [];
+    } catch {
+      behaviorClaims = [];
+    }
+
+    audits.push({
+      caseId: caseMatch[1].trim(),
+      behaviorClaims,
+      legacyAcceptanceCoverageGapDetected:
+        legacyGapMatch[1] === "true",
+    });
+  }
+
+  return audits;
+}
+
+function getUrlTransitionProofParityAudits(
+  log
+) {
+  /*
+   * Screenshot + video reconciliation may audit
+   * the same case more than once.
+   *
+   * Keep one parity observation per case so
+   * regression metrics count cases, not reviewers.
+   */
+  const auditsByCase = new Map();
+
+  for (const line of log.split(/\r?\n/)) {
+    if (
+      !line.includes(
+        "decision=URL_TRANSITION_PROOF_PARITY"
+      )
+    ) {
+      continue;
+    }
+
+    const caseMatch =
+      line.match(
+        /\bcaseId=([^,]+)/
+      );
+
+    const requirementCountMatch =
+      line.match(
+        /\burlTransitionRequirementCount=(\d+)\b/
+      );
+
+    const satisfiedCountMatch =
+      line.match(
+        /\burlTransitionSatisfiedCount=(\d+)\b/
+      );
+
+    const unsatisfiedCountMatch =
+      line.match(
+        /\burlTransitionUnsatisfiedCount=(\d+)\b/
+      );
+
+    const allSatisfiedMatch =
+      line.match(
+        /\burlTransitionAllSatisfied=(true|false)\b/
+      );
+
+    const legacyGapMatch =
+      line.match(
+        /\blegacyAcceptanceCoverageGapDetected=(true|false)\b/
+      );
+
+    if (
+      !caseMatch ||
+      !requirementCountMatch ||
+      !satisfiedCountMatch ||
+      !unsatisfiedCountMatch ||
+      !allSatisfiedMatch ||
+      !legacyGapMatch
+    ) {
+      continue;
+    }
+
+    const caseId =
+      caseMatch[1].trim();
+
+    auditsByCase.set(
+      caseId,
+      {
+        caseId,
+        urlTransitionRequirementCount:
+          Number(
+            requirementCountMatch[1]
+          ),
+        urlTransitionSatisfiedCount:
+          Number(
+            satisfiedCountMatch[1]
+          ),
+        urlTransitionUnsatisfiedCount:
+          Number(
+            unsatisfiedCountMatch[1]
+          ),
+        urlTransitionAllSatisfied:
+          allSatisfiedMatch[1] ===
+          "true",
+        legacyAcceptanceCoverageGapDetected:
+          legacyGapMatch[1] ===
+          "true",
+      }
+    );
+  }
+
+  return [
+    ...auditsByCase.values(),
+  ];
+}
+
+function getSelectedStateProofParityAudits(
+  log
+) {
+  /* Deduplicate screenshot/video audits by case. */
+  const auditsByCase = new Map();
+
+  for (const line of log.split(/\r?\n/)) {
+    if (
+      !line.includes(
+        "decision=SELECTED_STATE_PROOF_PARITY"
+      )
+    ) {
+      continue;
+    }
+
+    const caseMatch =
+      line.match(/\bcaseId=([^,]+)/);
+    const requirementCountMatch =
+      line.match(
+        /\bselectedStateRequirementCount=(\d+)\b/
+      );
+    const satisfiedCountMatch =
+      line.match(
+        /\bselectedStateSatisfiedCount=(\d+)\b/
+      );
+    const unsatisfiedCountMatch =
+      line.match(
+        /\bselectedStateUnsatisfiedCount=(\d+)\b/
+      );
+    const allSatisfiedMatch =
+      line.match(
+        /\bselectedStateAllSatisfied=(true|false)\b/
+      );
+
+    if (
+      !caseMatch ||
+      !requirementCountMatch ||
+      !satisfiedCountMatch ||
+      !unsatisfiedCountMatch ||
+      !allSatisfiedMatch
+    ) {
+      continue;
+    }
+
+    const caseId =
+      caseMatch[1].trim();
+
+    auditsByCase.set(caseId, {
+      caseId,
+      selectedStateRequirementCount:
+        Number(requirementCountMatch[1]),
+      selectedStateSatisfiedCount:
+        Number(satisfiedCountMatch[1]),
+      selectedStateUnsatisfiedCount:
+        Number(unsatisfiedCountMatch[1]),
+      selectedStateAllSatisfied:
+        allSatisfiedMatch[1] === "true",
+    });
+  }
+
+  return [...auditsByCase.values()];
 }
 
 const completedIssues =
@@ -1017,6 +2427,376 @@ for (const finding of productFindings) {
 }
 
 console.log(
+  `Deterministic findings: ${deterministicFindings.length}`
+);
+
+for (const finding of deterministicFindings) {
+  console.log(` - ${finding}`);
+}
+
+const behaviorProofLegacyAgreements =
+  behaviorProofRequirements.filter(
+    (audit) =>
+      audit
+        .legacyAcceptanceCoverageGapDetected
+  );
+
+const structuredOnlyBehaviorRequirements =
+  behaviorProofRequirements.filter(
+    (audit) =>
+      !audit
+        .legacyAcceptanceCoverageGapDetected
+  );
+
+const urlTransitionRequirementCount =
+  urlTransitionProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.urlTransitionRequirementCount,
+    0
+  );
+
+const urlTransitionSatisfiedCount =
+  urlTransitionProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.urlTransitionSatisfiedCount,
+    0
+  );
+
+const urlTransitionUnsatisfiedCount =
+  urlTransitionProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.urlTransitionUnsatisfiedCount,
+    0
+  );
+
+const urlTransitionParityDisagreements =
+  urlTransitionProofParityAudits.filter(
+    (audit) => {
+      const structuredGapDetected =
+        !audit.urlTransitionAllSatisfied;
+
+      return (
+        structuredGapDetected !==
+        audit
+          .legacyAcceptanceCoverageGapDetected
+      );
+    }
+  );
+
+const selectedStateRequirementCount =
+  selectedStateProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.selectedStateRequirementCount,
+    0
+  );
+
+const selectedStateSatisfiedCount =
+  selectedStateProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.selectedStateSatisfiedCount,
+    0
+  );
+
+const selectedStateUnsatisfiedCount =
+  selectedStateProofParityAudits.reduce(
+    (sum, audit) =>
+      sum +
+      audit.selectedStateUnsatisfiedCount,
+    0
+  );
+
+console.log(
+  `Behavior-proof requirements: ` +
+    `${behaviorProofRequirements.length}`
+);
+
+console.log(
+  `URL transition requirements: ` +
+    `${urlTransitionRequirementCount}`
+);
+
+console.log(
+  `URL transitions structured satisfied: ` +
+    `${urlTransitionSatisfiedCount}`
+);
+
+console.log(
+  `URL transitions structured unsatisfied: ` +
+    `${urlTransitionUnsatisfiedCount}`
+);
+
+console.log(
+  `URL transition legacy/structured disagreements: ` +
+    `${urlTransitionParityDisagreements.length}`
+);
+
+for (
+  const audit of
+  urlTransitionParityDisagreements
+) {
+  console.log(
+    ` - ${audit.issue} [${audit.caseId}]: ` +
+      `structuredAllSatisfied=` +
+      `${audit.urlTransitionAllSatisfied}, ` +
+      `legacyGap=` +
+      `${audit.legacyAcceptanceCoverageGapDetected}`
+  );
+}
+
+console.log(
+  `Selected-state requirements: ` +
+    `${selectedStateRequirementCount}`
+);
+
+console.log(
+  `Selected-state structured satisfied: ` +
+    `${selectedStateSatisfiedCount}`
+);
+
+console.log(
+  `Selected-state structured unsatisfied: ` +
+    `${selectedStateUnsatisfiedCount}`
+);
+
+console.log(
+  `Legacy guard agrees: ` +
+    `${behaviorProofLegacyAgreements.length}`
+);
+
+console.log(
+  `Structured-only requirements: ` +
+    `${structuredOnlyBehaviorRequirements.length}`
+);
+
+for (
+  const audit of
+  structuredOnlyBehaviorRequirements
+) {
+  console.log(
+    ` - ${audit.issue} [${audit.caseId}]: ` +
+      (
+        audit.behaviorClaims.length > 0
+          ? audit.behaviorClaims.join(" | ")
+          : "behavior claim unavailable"
+      )
+  );
+}
+
+/*
+ * FINAL_13_BASELINE_COMPARISON_SUMMARY_V1
+ *
+ * Do not report historical PASS preservation against the full
+ * baseline denominator when some historical PASS cases were not
+ * comparable under the current plan/profile/environment.
+ */
+const baselinePassNonComparableByClassification =
+  baselinePassNonComparable.reduce(
+    (counts, audit) => {
+      const classification =
+        String(
+          audit?.classification || "UNKNOWN"
+        );
+
+      counts[classification] =
+        (counts[classification] || 0) + 1;
+
+      return counts;
+    },
+    {}
+  );
+
+const historicalBaselinePassCount =
+  canonicalPlanMode &&
+  browserPassBaseline &&
+  Array.isArray(
+    browserPassBaseline.browserPassCases
+  )
+    ? browserPassBaseline.browserPassCases.length
+    : 0;
+
+const baselinePassComparisonSummary = {
+  historicalBaselinePassCount,
+
+  comparableCount:
+    baselinePassPreserved.length +
+    baselinePassRegressions.length,
+
+  preservedCount:
+    baselinePassPreserved.length,
+
+  regressionCount:
+    baselinePassRegressions.length,
+
+  nonComparableCount:
+    baselinePassNonComparable.length,
+
+  nonComparableByClassification:
+    baselinePassNonComparableByClassification,
+};
+
+console.log(
+  `Baseline PASS floor: ` +
+    `${
+      canonicalPlanMode
+        ? "ENFORCED"
+        : "SKIPPED_NON_CANONICAL"
+    }`
+);
+
+if (
+  canonicalPlanMode &&
+  browserPassBaseline
+) {
+  console.log(
+    `Historical baseline PASS: ` +
+      `${baselinePassComparisonSummary.historicalBaselinePassCount}`
+  );
+
+  console.log(
+    `Comparable historical PASS: ` +
+      `${baselinePassComparisonSummary.comparableCount}`
+  );
+
+  console.log(
+    ` - Preserved: ` +
+      `${baselinePassComparisonSummary.preservedCount}`
+  );
+
+  console.log(
+    ` - Regressions: ` +
+      `${baselinePassComparisonSummary.regressionCount}`
+  );
+
+  console.log(
+    `Non-comparable historical PASS: ` +
+      `${baselinePassComparisonSummary.nonComparableCount}`
+  );
+
+  console.log(
+    ` - Execution profile: ` +
+      `${
+        baselinePassNonComparableByClassification[
+          "NON_COMPARABLE_EXECUTION_PROFILE"
+        ] || 0
+      }`
+  );
+
+  console.log(
+    ` - Plan: ` +
+      `${
+        baselinePassNonComparableByClassification[
+          "NON_COMPARABLE_PLAN"
+        ] || 0
+      }`
+  );
+
+  console.log(
+    ` - Environment: ` +
+      `${
+        baselinePassNonComparableByClassification[
+          "NON_COMPARABLE_ENVIRONMENT"
+        ] || 0
+      }`
+  );
+
+  for (
+    const regression of
+    baselinePassRegressions
+  ) {
+    console.log(
+      `- ${regression.issue}` +
+        `[${regression.caseId}]: ` +
+        `PASS -> ${regression.currentStatus}`
+    );
+  }
+
+  for (
+    const audit of
+    baselinePassNonComparable
+  ) {
+    console.log(
+      `- ${audit.issue}` +
+        `[${audit.caseId}]: ` +
+        `${audit.classification}` +
+        (
+          Array.isArray(audit.reasons) &&
+          audit.reasons.length > 0
+            ? ` — ${audit.reasons.join(" | ")}`
+            : ""
+        )
+    );
+  }
+
+  console.log(
+    `Coverage gains over baseline: ` +
+      `${coverageGains.length}`
+  );
+
+  for (const gain of coverageGains) {
+    console.log(
+      ` - ${gain.issue} ` +
+        `[${gain.caseId}]: ` +
+        `new PASS`
+    );
+  }
+}
+
+if (
+  canonicalPlanMode &&
+  browserPassBaseline &&
+  Array.isArray(
+    browserPassBaseline
+      .browserCaseStatuses
+  )
+) {
+  const expectedNonPassCount =
+    browserPassBaseline
+      .browserCaseStatuses
+      .filter(
+        (entry) =>
+          String(
+            entry?.status || ""
+          )
+            .trim()
+            .toUpperCase() !== "PASS"
+      )
+      .length;
+
+  console.log(
+    `Baseline non-PASS unchanged: ` +
+      `${baselineUnchangedNonPass.length}/` +
+      `${expectedNonPassCount}`
+  );
+
+  console.log(
+    `Status reclassifications: ` +
+      `${baselineStatusReclassifications.length}`
+  );
+
+  for (
+    const reclassification of
+    baselineStatusReclassifications
+  ) {
+    console.log(
+      ` - ${reclassification.issue} ` +
+        `[${reclassification.caseId}]: ` +
+        `${reclassification.baselineStatus} -> ` +
+        `${reclassification.currentStatus}`
+    );
+  }
+
+  console.log(
+    `Baseline verdicts missing: ` +
+      `${baselineVerdictMissing.length}`
+  );
+}
+
+console.log(
   `Agent regressions: ${agentRegressions.length}`
 );
 
@@ -1065,9 +2845,62 @@ fs.writeFileSync(
   JSON.stringify(
     {
       runDir,
+executionProfile,
       totals,
       productFindings,
-      agentRegressions,
+      deterministicFindings,
+behaviorProofRequirements,
+behaviorProofLegacyAgreements,
+structuredOnlyBehaviorRequirements,
+
+urlTransitionProofParityAudits,
+urlTransitionRequirementCount,
+urlTransitionSatisfiedCount,
+urlTransitionUnsatisfiedCount,
+urlTransitionParityDisagreements,
+
+selectedStateProofParityAudits,
+selectedStateRequirementCount,
+selectedStateSatisfiedCount,
+selectedStateUnsatisfiedCount,
+
+baselinePassFloor: {
+comparisonSummary:
+baselinePassComparisonSummary,
+  enabled: canonicalPlanMode,
+  baselinePath:
+    browserPassBaselinePath,
+  sourceRunDir:
+    browserPassBaseline?.sourceRunDir ??
+    null,
+  expectedPassCount:
+    browserPassBaseline
+      ?.browserPassCases
+      ?.length ?? 0,
+  preserved:
+    baselinePassPreserved,
+nonComparable:
+baselinePassNonComparable,
+  regressions:
+    baselinePassRegressions,
+  gains:
+    coverageGains,
+},
+
+baselineVerdictAudit: {
+  expectedCaseCount:
+    browserPassBaseline
+      ?.browserCaseStatuses
+      ?.length ?? 0,
+  unchangedNonPass:
+    baselineUnchangedNonPass,
+  statusReclassifications:
+    baselineStatusReclassifications,
+  missing:
+    baselineVerdictMissing,
+},
+
+agentRegressions,
       unclassifiedFailures,
       failures,
       rows,
@@ -1079,6 +2912,8 @@ fs.writeFileSync(
   )
 );
 NODE
+
+
 
 echo
 echo "Run klasörü:"

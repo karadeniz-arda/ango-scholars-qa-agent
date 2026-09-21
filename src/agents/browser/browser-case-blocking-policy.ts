@@ -10,10 +10,49 @@ import {
   hasAssessmentLanguagePersistMutationStep,
   isAssessmentLanguageModalCase,
 } from "./browser-assessment-language-flow.js";
+import {
+  hasValidBrowserExecutionCheckContract,
+} from "../../planner/browser-execution-check-contract.js";
 
 function hasRuntimeInvoiceFixtureResolver(
   testCase: any
 ): boolean {
+  const contract =
+    testCase?.runtimeFixtureResolutionContract;
+  const members = Array.isArray(contract?.members)
+    ? contract.members
+    : [];
+  const interactionExecutionCaseId = String(
+    contract?.interactionExecutionCaseId || ""
+  ).trim();
+  const member = members.find(
+    (item: any) =>
+      String(item?.executionCaseId || "").trim() ===
+      interactionExecutionCaseId
+  );
+  const constraint =
+    member?.acceptanceFixtureConstraint;
+  const capability =
+    member?.fixtureResolutionCapability;
+
+  if (
+    contract?.status ===
+      "RUNTIME_FIXTURE_RESOLUTION_REQUIRED" &&
+    contract.policy === "ALL_REQUIRED" &&
+    members.length === 1 &&
+    member?.required === true &&
+    constraint?.authority === "SOURCE_AUTHORIZED" &&
+    constraint?.fixtureKind === "invoice" &&
+    constraint?.semantic?.kind === "STATE" &&
+    capability?.fixtureKind === "invoice" &&
+    capability?.resolverRef ===
+      "browser-visible-invoice-row" &&
+    capability?.supportedState ===
+      constraint.semantic.state
+  ) {
+    return true;
+  }
+
   const steps = Array.isArray(
     testCase?.steps
   )
@@ -111,6 +150,20 @@ function getExplicitMissingBrowserFixtureReason(
     return null;
   }
 
+  /*
+   * A selected-skill case may retain an exact fixture
+   * policy after the read-only runtime resolver has
+   * grounded the same existing records for API and
+   * browser execution.
+   */
+  if (
+    testCase
+      ?.runtimeSelectedSkillFixtureResolved ===
+    true
+  ) {
+    return null;
+  }
+
   if (
     hasRuntimeInvoiceFixtureResolver(
       testCase
@@ -200,8 +253,63 @@ const textAssertionProvenanceFailure =
       ""
   ).trim();
 
+const hasMaterializedAuthoritativeChecks =
+  hasValidBrowserExecutionCheckContract({
+    caseId: String(testCase?.id || ""),
+    contract: testCase?.executionCheckContract,
+  });
+
+/*
+ * The lexical relevance heuristic predates source-backed execution intent.
+ * A complete intent already carries the authoritative source envelope and an
+ * exact runtime route policy. Its planner-derived area label may rank route
+ * candidates, but cannot become a second execution veto.
+ */
+function hasCompatibleSourceBackedExecutionIntent(testCase: any): boolean {
+  const intent = testCase?.executionIntentAuthority;
+  const routePolicy = intent?.sourceTargetEnvelope?.routePolicy;
+  const startRoute = String(testCase?.startRoute || "").trim();
+  if (
+    intent?.schemaVersion !== 1 ||
+    intent?.caseId !== String(testCase?.id || "") ||
+    !Array.isArray(intent?.sourceUnitRefs) ||
+    intent.sourceUnitRefs.length === 0 ||
+    !Array.isArray(intent?.sourceTargetEnvelope?.sourceUnitRefs) ||
+    intent.sourceTargetEnvelope.sourceUnitRefs.length === 0 ||
+    !routePolicy ||
+    !hasMaterializedAuthoritativeChecks
+  ) return false;
+
+  return routePolicy.kind !== "PREBOUND_EXACT" ||
+    routePolicy.route === startRoute;
+}
+
+const invalidSourceBoundCheckContract =
+  Boolean(testCase?.executionCheckContract) &&
+  Array.isArray(testCase.executionCheckContract?.requiredChecks) &&
+  testCase.executionCheckContract.requiredChecks.some(
+    (check: any) =>
+      check?.kind === "SOURCE_BOUND_ASSERTION_MEMBER"
+  ) &&
+  !hasMaterializedAuthoritativeChecks;
+
+if (invalidSourceBoundCheckContract) {
+  return (
+    "Browser execution-check contract provenance gate blocked " +
+    `${testCase?.id || "case"}: required source-bound check transport is invalid.`
+  );
+}
+
 if (textAssertionProvenanceFailure) {
-  return textAssertionProvenanceFailure;
+  /*
+   * The legacy planner gate predates typed execution contracts and examined
+   * every positive planner assertion. Once a complete contract exists, its
+   * members are the sole required assertion set; planner-only suffixes remain
+   * hints and cannot become a second provenance veto.
+   */
+  if (!hasMaterializedAuthoritativeChecks) {
+    return textAssertionProvenanceFailure;
+  }
 }
 
 const fixtureBlockReason =
@@ -216,7 +324,10 @@ if (fixtureBlockReason) {
 const relevanceBlockReason =
   getBrowserRelevanceBlockReason(testCase);
 
-if (relevanceBlockReason) {
+if (
+  relevanceBlockReason &&
+  !hasCompatibleSourceBackedExecutionIntent(testCase)
+) {
   return relevanceBlockReason;
 }
 
@@ -262,6 +373,14 @@ export function getBrowserBlockReasonCategory(
     return (
       "TEXT_ASSERTION_PROVENANCE_MISSING"
     );
+  }
+
+  if (
+    reason.includes(
+      "Browser execution-check contract provenance gate blocked"
+    )
+  ) {
+    return "TEXT_ASSERTION_PROVENANCE_MISSING";
   }
 
   if (

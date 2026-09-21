@@ -1,16 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import yaml from "yaml";
+import {
+  recoverStaticSurfaceRoutes,
+  type StaticSurfaceRouteDerivation,
+  type StaticSurfaceRouteKind,
+} from "./static-surface-route-extraction.js";
+import type { SourceBackedSurfaceIdentity } from "./source-surface-provenance.js";
+import {
+  extractSourceBackedSurfaceIdentities,
+} from "./source-surface-provenance.js";
 
-type UiRouteEntry = {
+export type UiRouteEntry = {
   path: string;
   file: string;
   params: string[];
   area: string;
   persona: "company_admin" | "talent" | "admin" | "unknown";
+  origin?: "UI_ROUTE_MANIFEST";
+  authoritative?: true;
+  derivation?: StaticSurfaceRouteDerivation;
+  routeKind?: StaticSurfaceRouteKind;
+  sourceRef?: string;
+  childRoute?: string;
+  parentRoute?: string;
+  parentSourceRef?: string;
+  mountedComponents?: string[];
+  mountedComponentSources?: Array<{ componentName: string; file: string }>;
+  surfaceIdentity?: SourceBackedSurfaceIdentity;
 };
 
-type UiRoutesManifest = {
+export type UiRoutesManifest = {
   generatedAt: string;
   sourceRoot: string;
   routes: UiRouteEntry[];
@@ -178,9 +199,17 @@ function extractRoutesFromFile(clientRoot: string, filePath: string): UiRouteEnt
   return [...routes.values()];
 }
 
-function buildManifest(clientRoot: string): UiRoutesManifest {
+export function buildUiRoutesManifest(
+  clientRoot: string
+): UiRoutesManifest {
   const allFiles = walkFiles(clientRoot);
   const routeFiles = allFiles.filter(isRouteCandidateFile);
+  const sourceInputs = allFiles
+    .filter((file) => /\.(?:ts|tsx|js|jsx)$/i.test(file))
+    .map((file) => ({
+      file: normalizePath(path.relative(clientRoot, file)),
+      source: fs.readFileSync(file, "utf8"),
+    }));
 
   const routeMap = new Map<string, UiRouteEntry>();
 
@@ -204,14 +233,89 @@ function buildManifest(clientRoot: string): UiRoutesManifest {
     }
   }
 
+  const structuralRoutes =
+    recoverStaticSurfaceRoutes(sourceInputs);
+
+  for (const route of structuralRoutes) {
+    const existing = routeMap.get(route.route);
+    if (existing) {
+      if (route.mountedComponents || route.mountedComponentSources) {
+        routeMap.set(route.route, {
+          ...existing,
+          ...(route.mountedComponents ? { mountedComponents: route.mountedComponents } : {}),
+          ...(route.mountedComponentSources ? { mountedComponentSources: route.mountedComponentSources } : {}),
+        });
+      }
+      continue;
+    }
+    if (route.routeKind !== "STATIC") continue;
+
+    const sourceFile =
+      route.sourceRef.replace(/:\d+$/, "");
+
+    routeMap.set(route.route, {
+      path: route.route,
+      file: sourceFile,
+      params: extractParams(route.route),
+      area: inferArea(route.route, sourceFile),
+      persona: inferPersona(route.route),
+      origin: route.origin,
+      authoritative: true,
+      derivation: route.derivation,
+      routeKind: route.routeKind,
+      sourceRef: route.sourceRef,
+      childRoute: route.childRoute,
+      ...(route.mountedComponents
+        ? { mountedComponents: route.mountedComponents }
+        : {}),
+      ...(route.mountedComponentSources
+        ? { mountedComponentSources: route.mountedComponentSources }
+        : {}),
+      ...(route.parentRoute
+        ? { parentRoute: route.parentRoute }
+        : {}),
+      ...(route.parentSourceRef
+        ? {
+            parentSourceRef:
+              route.parentSourceRef,
+          }
+        : {}),
+    });
+  }
+
   const routes = [...routeMap.values()].sort((a, b) =>
     a.path.localeCompare(b.path)
   );
 
+  const surfaceIdentities = extractSourceBackedSurfaceIdentities({
+    routes: routes.map((route) => ({
+      route: route.path,
+      ...(route.file ? { file: route.file } : {}),
+      persona: route.persona,
+      ...(route.routeKind ? { routeKind: route.routeKind } : {}),
+      ...(route.mountedComponents
+        ? { mountedComponents: route.mountedComponents }
+        : {}),
+      ...(route.mountedComponentSources
+        ? { mountedComponentSources: route.mountedComponentSources }
+        : {}),
+    })),
+    sources: sourceInputs,
+  });
+  const identityByRoute = new Map(
+    surfaceIdentities.map((identity) => [identity.routeRef, identity])
+  );
+  const enrichedRoutes = routes.map((route) => {
+    const surfaceIdentity = identityByRoute.get(route.path);
+    return surfaceIdentity
+      ? { ...route, surfaceIdentity }
+      : route;
+  });
+
   return {
     generatedAt: new Date().toISOString(),
     sourceRoot: path.resolve(clientRoot),
-    routes,
+    routes: enrichedRoutes,
   };
 }
 
@@ -232,7 +336,7 @@ function main() {
     );
   }
 
-  const manifest = buildManifest(clientRoot);
+  const manifest = buildUiRoutesManifest(clientRoot);
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, yaml.stringify(manifest), "utf8");
@@ -242,4 +346,10 @@ function main() {
   console.log(`Routes discovered: ${manifest.routes.length}`);
 }
 
-main();
+if (
+  process.argv[1] &&
+  import.meta.url ===
+    pathToFileURL(process.argv[1]).href
+) {
+  main();
+}

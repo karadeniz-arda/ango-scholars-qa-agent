@@ -11,6 +11,66 @@ type BrowserArea =
   | "onboarding"
   | "talent-profile";
 
+const EXPLICIT_BROWSER_SURFACE_PATTERNS:
+  ReadonlyArray<
+    readonly [BrowserArea, RegExp]
+  > = [
+    ["assessments", /assessments?/],
+    ["languages", /languages?/],
+    ["skills", /skills?/],
+    ["jobs", /jobs?/],
+    ["work-setups", /work[- ]setups?/],
+    ["payments", /(?:all\s+)?payments?/],
+    ["contracts", /contracts?/],
+    ["offers", /offers?/],
+    ["talent-pool", /talent\s+pool/],
+    ["onboarding", /onboarding/],
+    ["talent-profile", /talent\s+profile/],
+  ];
+
+/*
+ * Explicit target-surface semantics outrank relational field
+ * vocabulary. For example, "job title" is a searchable field on a
+ * Payments page; it does not make the target surface a Jobs page.
+ *
+ * Match only a known area name followed by a surface noun. Bare area
+ * vocabulary continues through the existing inference rules below.
+ * Multiple explicit areas remain ambiguous and therefore fail closed.
+ */
+function inferExplicitBrowserSurfaceArea(
+  rawText: string
+): BrowserArea | null | undefined {
+  const text = String(rawText || "")
+    .trim()
+    .toLowerCase();
+
+  if (!text) {
+    return undefined;
+  }
+
+  const areas = new Set<BrowserArea>();
+  const surfaceKind =
+    "(?:page|screen|view|tab|surface|workflow|list|details?)";
+
+  for (const [area, name] of
+    EXPLICIT_BROWSER_SURFACE_PATTERNS) {
+    const pattern = new RegExp(
+      `\\b(?:${name.source})\\s+${surfaceKind}\\b`,
+      "i"
+    );
+
+    if (pattern.test(text)) {
+      areas.add(area);
+    }
+  }
+
+  if (areas.size > 1) {
+    return null;
+  }
+
+  return areas.values().next().value;
+}
+
 export function getBrowserCaseText(testCase: any): string {
   const stepText = Array.isArray(testCase.steps)
     ? testCase.steps
@@ -201,6 +261,19 @@ export function inferBrowserCaseArea(
   ];
 
   for (const source of inferenceSources) {
+    const explicitArea =
+      inferExplicitBrowserSurfaceArea(
+        source
+      );
+
+    if (explicitArea === null) {
+      return undefined;
+    }
+
+    if (explicitArea) {
+      return explicitArea;
+    }
+
     const area =
       inferBrowserAreaFromText(source);
 

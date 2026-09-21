@@ -4,6 +4,7 @@ type QaResult = {
   method?: string;
   status?: string;
   reasonCategory?: string;
+  terminationReason?: string;
   notes?: string;
   originalPath?: string;
   resolvedPath?: string;
@@ -64,6 +65,7 @@ function resultText(result: QaResult): string {
       result.status,
       result.reasonCategory,
       result.notes,
+      result.terminationReason,
       result.evidence,
       result.originalPath,
       result.resolvedPath,

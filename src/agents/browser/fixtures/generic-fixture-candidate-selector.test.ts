@@ -8,6 +8,7 @@ import {
   type GenericFixtureCandidateModelInput,
 } from "./generic-fixture-candidate-selector.js";
 import {
+  buildWorkSetupFixtureRequirementContext,
   resolveWorkSetupFixtureCandidateDecision,
 } from "./talent-contract-work-setup-fixture.js";
 
@@ -71,7 +72,12 @@ test(
 
     const result =
       await resolveWorkSetupFixtureCandidateDecision({
-        testCase: requirements,
+testCase: {
+  ...requirements,
+  fixtureRequirements: [
+    "A compatible Work Setup requiring file upload.",
+  ],
+},
         companyData: [
           {
             id: "runtime-sensitive-id",
@@ -548,6 +554,123 @@ test(
         missingContext
           .evaluation.status,
         "SEMANTIC_CONTEXT_REQUIRED"
+      );
+    }
+  }
+);
+
+
+test(
+  "Work Setup candidate context excludes negative copy assertions",
+  () => {
+    const context =
+      buildWorkSetupFixtureRequirementContext({
+        goal:
+          "Verify populated Work Setups helper text.",
+        successCriteria:
+          "The new helper text is shown.",
+        automatedChecks: [
+          "Verify Work Setups is visible.",
+          "Verify old document upload copy is not visible.",
+        ],
+        fixtureRequirements: [
+          "A contract with at least one assigned Work Setup.",
+        ],
+        steps: [
+          {
+            action:
+              "assertTextVisible",
+            text: "Work Setups",
+          },
+          {
+            action:
+              "assertTextNotVisible",
+            text:
+              "Some require a document upload for review.",
+          },
+        ],
+      });
+
+    assert.deepEqual(
+      context.automatedChecks,
+      ["Work Setups"]
+    );
+  }
+);
+
+test(
+  "generic populated Work Setup selection bypasses a low-confidence model proposal",
+  async () => {
+    let proposalRequested = false;
+
+    const result =
+      await resolveWorkSetupFixtureCandidateDecision({
+        testCase: {
+          goal:
+            "Verify a populated Work Setups section.",
+          successCriteria:
+            "At least one assigned Work Setup is visible.",
+          automatedChecks: [
+            "Verify Work Setups is visible.",
+          ],
+          fixtureRequirements: [
+            "A talent-owned contract with at least one assigned Work Setup.",
+          ],
+          steps: [
+            {
+              action:
+                "assertTextVisible",
+              text: "Work Setups",
+            },
+          ],
+        },
+        companyData: [
+          {
+            id: "setup-b",
+            title: "Beta setup",
+          },
+          {
+            id: "setup-a",
+            title: "Alpha setup",
+          },
+        ],
+        visibleTalentData: [],
+        selectCandidate:
+          runGenericFixtureCandidateSelection,
+        requestCandidateProposal:
+          async () => {
+            proposalRequested = true;
+            return {
+              decision:
+                "SELECT_CANDIDATE",
+              selectionMode:
+                "ATTACH_NEW",
+              candidateId:
+                "candidate-not-used",
+              confidence: "low",
+              rationale:
+                "The fallback must not override a deterministic generic match.",
+              evidence: [],
+            };
+          },
+      });
+
+    assert.equal(
+      proposalRequested,
+      false
+    );
+    assert.equal(
+      result.status,
+      "ATTACH_NEW"
+    );
+
+    if (
+      result.status ===
+        "ATTACH_NEW"
+    ) {
+      assert.equal(
+        result.workSetupTitle,
+        "Alpha setup"
       );
     }
   }

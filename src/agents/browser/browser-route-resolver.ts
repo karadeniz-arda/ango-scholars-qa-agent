@@ -26,6 +26,19 @@ import {
 import {
   copyRuntimeTalentContractFixture,
 } from "./fixtures/talent-contract-fixture-context.js";
+import {
+  copyRuntimeDeepRouteBinding,
+} from "./browser-deep-route-binding-context.js";
+import {
+  inferAcceptanceTargetSurfaceRequirement,
+  selectAcceptanceCompatibleRoute,
+} from "./browser-route-target-compatibility.js";
+import {
+  findUniqueStaticUiRouteForArea,
+} from "../../discovery/ui-route-catalog.js";
+import {
+  resolveAssessmentRouteFromRuntimeResourceContext,
+} from "./browser-runtime-resource-route-binding.js";
 
 export async function resolveBrowserRoute(
   plan: any,
@@ -147,12 +160,16 @@ export async function resolveBrowserRoute(
     normalizedCaseText.includes("assessment") &&
     !isJobChangeRequestFlow
   ) {
-  const context =
-    await getCachedBrowserExecutionContext(
-      persona,
-      testCase
-        ?.runtimeResourceContext
-    );
+  const handedOffRoute = resolveAssessmentRouteFromRuntimeResourceContext({
+    persona,
+    runtimeResourceContext: testCase?.runtimeResourceContext,
+  });
+  if (handedOffRoute) return handedOffRoute;
+
+  const context = await getCachedBrowserExecutionContext(
+    persona,
+    testCase?.runtimeResourceContext
+  );
 
   if (!context.assessmentId) {
     console.log(
@@ -162,13 +179,10 @@ export async function resolveBrowserRoute(
     return "UNKNOWN";
   }
 
-  if (persona === "company_admin") {
-    return `/company/assessments/${context.assessmentId}`;
-  }
-
-  if (persona === "talent") {
-    return `/talent/assessments/${context.assessmentId}/prepare`;
-  }
+  return resolveAssessmentRouteFromRuntimeResourceContext({
+    persona,
+    runtimeResourceContext: context,
+  }) ?? "UNKNOWN";
 }
 
   /**
@@ -433,6 +447,10 @@ export async function resolveBrowserRouteCandidates(
     runtimeResolutionCase,
     testCase
   );
+  copyRuntimeDeepRouteBinding(
+    runtimeResolutionCase,
+    testCase
+  );
 
   const runtimeFixtureResolutionFailure =
     String(
@@ -455,13 +473,13 @@ export async function resolveBrowserRouteCandidates(
     "runtime-fixture-resolver"
   );
 
-  for (
-    const candidate of
+  const discoveredCandidates =
     discoverBrowserRouteCandidates(
       plan,
       testCase
-    )
-  ) {
+    );
+
+  for (const candidate of discoveredCandidates) {
     const confidenceScore =
       candidate.confidence === "high"
         ? 60
@@ -474,6 +492,126 @@ export async function resolveBrowserRouteCandidates(
       confidenceScore,
       `${candidate.source}: ${candidate.reason}`
     );
+  }
+
+  /*
+   * A static manifest route is a safe navigation seed when, and only when,
+   * the repository gives this persona/area pair one unambiguous entry route.
+   * Catalog lexical scoring may be too weak for source text that describes a
+   * nested surface rather than the entry route itself. This does not make the
+   * route an acceptance target: the normal live probe remains the only route
+   * acceptance boundary.
+   */
+  if (
+    wantedArea &&
+    (testCase?.persona === "company_admin" ||
+      testCase?.persona === "talent")
+  ) {
+    const manifestSeed =
+      findUniqueStaticUiRouteForArea({
+        persona: testCase.persona,
+        area: wantedArea,
+      });
+
+    if (manifestSeed) {
+      addCandidate(
+        manifestSeed.route,
+        30,
+        "unique-static-manifest-area-route"
+      );
+    }
+  }
+
+  /*
+   * ACCEPTANCE_COMPATIBLE_TARGET_SELECTION_V0
+   *
+   * A verified runtime identifier can instantiate a deep
+   * route, but it cannot promote that route over a
+   * requirement-grounded collection surface. Apply this
+   * gate before availability scores are ranked. Other
+   * surface kinds retain the existing deep-route binding
+   * behavior in this narrow package.
+   */
+  const surfaceRequirement =
+    inferAcceptanceTargetSurfaceRequirement(
+      testCase
+    );
+
+  if (
+    surfaceRequirement.status ===
+      "RESOLVED" &&
+    surfaceRequirement.kind ===
+      "COLLECTION"
+  ) {
+    const compatibilitySelection =
+      selectAcceptanceCompatibleRoute(
+        testCase,
+        discoveredCandidates.map(
+          (candidate) => ({
+            route: candidate.route,
+            ...(candidate.origin
+              ? {
+                  origin:
+                    candidate.origin,
+                }
+              : {}),
+            ...(candidate.authoritative !==
+            undefined
+              ? {
+                  authoritative:
+                    candidate.authoritative,
+                }
+              : {}),
+            areaCompatible:
+              !wantedArea ||
+              !inferRuntimeRouteArea(
+                candidate.route
+              ) ||
+              areRuntimeRouteAreasCompatible(
+                wantedArea,
+                inferRuntimeRouteArea(
+                  candidate.route
+                )!
+              ),
+          })
+        )
+      );
+
+    if (
+      compatibilitySelection.status ===
+        "SELECTED" &&
+      compatibilitySelection.selectedRoute
+    ) {
+      for (const route of ranked.keys()) {
+        if (
+          route !==
+          compatibilitySelection.selectedRoute
+        ) {
+          ranked.delete(route);
+        }
+      }
+
+      console.log(
+        ` Acceptance-compatible route selection for ` +
+          `${testCase?.id ?? "case"}: ` +
+          `required=COLLECTION, selected=` +
+          `${compatibilitySelection.selectedRoute}, ` +
+          `excluded=${
+            compatibilitySelection.excludedRoutes.join(
+              ","
+            ) || "none"
+          }`
+      );
+    } else {
+      ranked.clear();
+
+      console.log(
+        ` Acceptance-compatible route selection abstained for ` +
+          `${testCase?.id ?? "case"}: ` +
+          `${compatibilitySelection.status} — ` +
+          `${compatibilitySelection.reason}`
+      );
+    }
   }
 
   const selected = [...ranked.values()]

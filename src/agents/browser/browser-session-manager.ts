@@ -98,7 +98,56 @@ export async function createBrowserRuntimeSession(
 
   let page = await context.newPage();
 
-  await page.goto(`${baseUrl}/account/login`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}/account/login`, {
+    waitUntil: "domcontentloaded",
+  });
+
+  /*
+   * Stagehand initializes its own default context/page
+   * before this runner connects over CDP and creates the
+   * dedicated recorded context above. Close only blank
+   * pages belonging to other contexts so the browser does
+   * not retain an unused about:blank tab.
+   */
+  let closedBlankPageCount = 0;
+
+  for (
+    const existingContext
+    of browser.contexts()
+  ) {
+    if (existingContext === context) {
+      continue;
+    }
+
+    for (
+      const existingPage
+      of existingContext.pages()
+    ) {
+      if (
+        existingPage.url() !==
+        "about:blank"
+      ) {
+        continue;
+      }
+
+      const closed =
+        await existingPage
+          .close()
+          .then(() => true)
+          .catch(() => false);
+
+      if (closed) {
+        closedBlankPageCount += 1;
+      }
+    }
+  }
+
+  if (closedBlankPageCount > 0) {
+    console.log(
+      ` Closed ${closedBlankPageCount} unused ` +
+        `Stagehand about:blank page(s).`
+    );
+  }
 
   return {
     stagehand,

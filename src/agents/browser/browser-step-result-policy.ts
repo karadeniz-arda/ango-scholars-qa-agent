@@ -109,6 +109,86 @@ export function requiresPanelOrModalBrowserCase(
   );
 }
 
+function isDeterministicAssertionEvidence(
+  evidence: BrowserDeterministicEvidence
+): boolean {
+  return [
+    "assertUrlContains",
+    "assertUrlNotContains",
+    "assertTextVisible",
+    "assertSurfaceControls",
+    "assertTextNotVisible",
+    "assertCollectionFilter",
+  ].includes(evidence.action);
+}
+
+function hasConflictingAssertionCriticality(
+  deterministicEvidence:
+    BrowserDeterministicEvidence[]
+): boolean {
+  const criticalityByOracle =
+    new Map<string, Set<string>>();
+
+  for (const evidence of deterministicEvidence) {
+    const oracleId = String(
+      evidence.oracleId ?? ""
+    ).trim();
+
+    if (!oracleId) {
+      continue;
+    }
+
+    const criticality =
+      evidence.acceptanceCritical === false
+        ? "false"
+        : evidence.acceptanceCritical === true
+          ? "true"
+          : "unknown";
+
+    const observed =
+      criticalityByOracle.get(oracleId) ??
+      new Set<string>();
+
+    observed.add(criticality);
+    criticalityByOracle.set(
+      oracleId,
+      observed
+    );
+  }
+
+  return Array.from(
+    criticalityByOracle.values()
+  ).some(
+    (criticalities) =>
+      criticalities.size > 1
+  );
+}
+
+function onlyExplicitlyNonCriticalAssertionsFailed(
+  deterministicEvidence:
+    BrowserDeterministicEvidence[]
+): boolean {
+  const failedEvidence =
+    deterministicEvidence.filter(
+      (evidence) => !evidence.passed
+    );
+
+  return (
+    failedEvidence.length > 0 &&
+    failedEvidence.every(
+      (evidence) =>
+        isDeterministicAssertionEvidence(
+          evidence
+        ) &&
+        evidence.acceptanceCritical ===
+          false
+    ) &&
+    !hasConflictingAssertionCriticality(
+      deterministicEvidence
+    )
+  );
+}
+
 export function finalizeBrowserStepResult(args: {
   testCase: any;
   notes: string[];
@@ -149,17 +229,40 @@ export function finalizeBrowserStepResult(args: {
       reasonCategory:
         "AUTOMATION_LIMITATION",
       notes,
+      ...(deterministicEvidence.length > 0
+        ? { deterministicEvidence }
+        : {}),
     };
   }
 
-  const hasFailedDeterministicUrlAssertion =
+  const hasFailedDeterministicEvidence =
     deterministicEvidence.some(
       (evidence) => !evidence.passed
     );
 
   if (hasFailedAssertion) {
     if (
-      !hasFailedDeterministicUrlAssertion &&
+      onlyExplicitlyNonCriticalAssertionsFailed(
+        deterministicEvidence
+      )
+    ) {
+      return {
+        status: "MANUAL_REQUIRED",
+        reasonCategory:
+          "NON_CRITICAL_ASSERTION_FAILED",
+        notes: [
+          ...notes,
+          "manual required: only explicitly non-critical " +
+            "deterministic assertion evidence failed; " +
+            "acceptance behavior was not proven enough " +
+            "for PASS",
+        ],
+        deterministicEvidence,
+      };
+    }
+
+    if (
+      !hasFailedDeterministicEvidence &&
       (
         hasActionLimitation ||
         requiresPanelOrModal ||
@@ -181,7 +284,7 @@ export function finalizeBrowserStepResult(args: {
     return {
       status: "FAIL",
       reasonCategory:
-        hasFailedDeterministicUrlAssertion
+        hasFailedDeterministicEvidence
           ? "DETERMINISTIC_URL_ASSERTION_FAILED"
           : "PRODUCT_ASSERTION_FAILED",
       notes,

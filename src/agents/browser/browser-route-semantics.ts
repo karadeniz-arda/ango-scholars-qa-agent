@@ -4,6 +4,46 @@ export type DesiredJobStatus =
   | "closed"
   | "draft";
 
+export function isInternalBrowserRoute(
+  route: string
+): boolean {
+  const normalized =
+    String(route || "").trim();
+
+  if (
+    !normalized.startsWith("/") ||
+    normalized.startsWith("//") ||
+    normalized.startsWith("/api/")
+  ) {
+    return false;
+  }
+
+  return (
+    normalized === "/company" ||
+    normalized.startsWith("/company/") ||
+    normalized === "/talent" ||
+    normalized.startsWith("/talent/") ||
+    normalized === "/admin" ||
+    normalized.startsWith("/admin/")
+  );
+}
+
+export function isBrowserRouteCompatibleWithPersona(
+  route: string,
+  persona: BrowserPersona
+): boolean {
+  const normalized =
+    String(route || "").trim();
+
+  return persona === "company_admin"
+    ? normalized.startsWith(
+        "/company/"
+      )
+    : normalized.startsWith(
+        "/talent/"
+      );
+}
+
 export function isConcreteBrowserRoute(route: string): boolean {
   const normalized = String(route || "").trim();
 
@@ -21,10 +61,8 @@ export function isConcreteBrowserRoute(route: string): boolean {
     return false;
   }
 
-  return (
-    normalized.startsWith("/company") ||
-    normalized.startsWith("/talent") ||
-    normalized.startsWith("/admin")
+  return isInternalBrowserRoute(
+    normalized
   );
 }
 
