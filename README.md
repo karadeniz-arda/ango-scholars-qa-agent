@@ -1,220 +1,61 @@
-# Ango Scholars QA Agent
+# ango-scholars-qa-agent
 
-A TypeScript-based QA agent that generates and executes issue-specific API and browser test plans for Ango Scholars.
+An evidence-first QA agent that turns Jira and repository context into bounded API and browser checks. It is deliberately fail-closed: a useful interaction, model confidence, or a screenshot is never enough by itself to claim PASS.
 
-The latest validated regression results, delivered capabilities, remaining limitations, and next-phase recommendations are documented in [HANDOFF.md](HANDOFF.md).
+## Current checkpoint
 
-Packaging, execution, and review guidance for the delivery ZIPs is documented in [DELIVERY.md](DELIVERY.md).
+Fresh31 is the current frozen reproducibility cohort at `qa-results/runs/fresh31-prefinal-frozen-20260920-170933`.
 
-The agent can:
-- Fetch Jira issue context.
-- Fetch related GitHub change context.
-- Generate structured API and browser test plans with an LLM.
-- Resolve executable routes using known route rules and runtime API data.
-- Run API tests against staging.
-- Run browser tests against staging with Playwright/Stagehand.
-- Capture screenshots and videos as evidence.
-- Write PASS / FAIL / BLOCKED / MANUAL_REQUIRED / ERROR results into a markdown report.
+| Run | PASS | FAIL | BLOCKED | MANUAL_REQUIRED | ERROR | Runtime cases |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A | 2 | 1 | 25 | 9 | 0 | 37 |
+| B | 2 | 1 | 25 | 9 | 0 | 37 |
+| C | 2 | 1 | 25 | 9 | 0 | 37 |
 
----
+The A–B status delta, B–C status/technical delta, and PASS asymmetry were all zero: `STABLE_CASE_AND_TECHNICAL`. This is a frozen-cohort reproducibility result, not product-wide certification.
 
-## Tech Stack
-- Node.js
-- TypeScript
-- tsx
-- Jira API
-- GitHub API
-- Firebase Auth
-- Playwright
-- Stagehand
-- YAML config
+## Safety model
 
----
-
-## Prerequisites
-- Node.js
-- npm
-- Access to Jira
-- Access to GitHub repositories
-- Firebase service account credentials
-- Staging environment access
-
----
-
-## Installation
-
-    npm ci
-
-### Environment Variables
-
-Copy the environment template before running the agent:
-
-```bash
-cp .env.example .env
+```text
+REQUIREMENT != CASE EXISTENCE != INTERACTION EXECUTION != DETERMINISTIC PROOF != VISUAL REVIEW != FINAL VERDICT
+EXECUTED != PROVED
 ```
 
-Populate `.env` with the values required for the features you intend to run.
+A PASS requires source authority, a typed execution/proof contract, accepted fresh runtime context, deterministic evidence, and a clean runtime audit. The generic browser cycle is observe → one grounded safe action → execute → re-observe. It rejects ambiguous targets and avoids product scripts, `nth` selectors, DOM-order, CSS/framework identifiers, and pixel/proximity heuristics.
 
-The supported variable groups include:
+Current real-UI evidence includes source-bound literal proof (AS-1058) and false-PASS prevention (AS-1311: a model `GOAL_ALREADY_SATISFIED` claim did not override a failed `Download as PDF` check). Structural controls, route discovery, action cycles, query/filter behavior, and transitions have narrower or historical evidence; unattended fixture provisioning/cleanup is not production-ready.
 
-- Ollama planning and reasoning configuration
-- Firebase authentication
-- Jira issue access
-- GitHub change-context access
-- QA company and talent personas
-- Screenshot and video evidence review
-- Optional Gemini vision-provider configuration
-- Browser and API mutation safety controls
-
-Not every variable is required for every command. The complete and current
-list of supported variables is maintained in `.env.example`.
-
-> **Note:** Do not commit your `.env` file to version control.
-
-For authenticated staging execution, set `QA_AUTH_MODE=firebase`
-and populate the required Firebase, persona, Jira, GitHub, model-provider,
-and environment values described in `.env.example`. The template defaults
-remain intentionally safe and do not provide working credentials.
-
-### Configuration
-Staging URLs are configured in `config/environments.yaml`.
-
-Example:
-
-    default_target: staging
-
-    environments:
-      staging:
-        url: https://example-client-url
-        api_url: https://example-server-url
-
----
-
-## Usage
-
-> **Important execution model:** `npm run plan` writes the active plan to
-> `qa-results/test-plan.json`. The `run`, `browser`, and `smoke` commands
-> execute that active plan; their `--issue` argument does not regenerate it.
-> Generate or load the matching plan before running an issue. The canonical
-> and multi-issue scripts handle this plan switching automatically.
-
-### Generate a Test Plan
-Generate a test plan from a Jira issue:
-
-    npm run plan -- --issue AS-1066
-
-*This creates: qa-results/test-plan.json*
-
-### Run API Cases
-
-    npm run run -- --issue AS-1066
-
-*This executes the generated API cases and writes results to: qa-results/report.md*
-
-### Run Browser Cases
-
-    npm run browser -- --issue AS-1066
-
-*This executes browser cases, captures screenshots/videos, and writes results to: qa-results/report.md*
-
-Browser evidence is saved under:
-- qa-results/evidence/
-- qa-results/videos/
-
-### Run API + Browser Smoke
-
-    npm run smoke -- --issue AS-1066
-
----
-
-## Result Statuses
-
-The report uses the following statuses:
-
-- **PASS:** The case executed and all required assertions passed.
-- **FAIL:** The case executed and at least one required assertion failed with sufficient deterministic evidence.
-- **BLOCKED:** Execution was prevented by missing fixture data, an unresolved API contract, mutation safety policy, unsupported authentication, or another explicit prerequisite.
-- **MANUAL_REQUIRED:** The correct feature area was reached, but the runner or available evidence could not safely confirm the complete acceptance criterion.
-- **ERROR:** An unexpected execution or infrastructure error occurred.
-
----
-
-## Current Capabilities
-
-The current agent supports:
-
-- Real Jira issue and GitHub change-context based planning.
-- Planner case budgets, fixture policies, URL assertion prerequisites, mutation safety rules, and schema normalization.
-- API endpoint and UI route manifest discovery.
-- Runtime company, project, talent, job, assessment, invoice, contract, work-setup, skill, and related execution-context resolution.
-- Source-grounded query-parameter preservation while resolving unknown endpoint bases.
-- API semantic assertions in addition to HTTP status checks.
-- Safe default blocking for mutating API requests.
-- Safe default blocking for browser mutations.
-- A dedicated QA-owned draft-job creation flow with exact redirect verification and exact cleanup.
-- Firebase-backed company-admin and talent browser personas.
-- Browser session reuse for consecutive cases with the same persona.
-- Generic browser actions including tab selection, menu opening, filtering, reload, URL assertions, text assertions, and safe option selection.
-- Semantic table-row matching and safe row-detail control discovery.
-- Runtime-compatible invoice and contract fixture selection where the plan explicitly permits compatible-state substitution.
-- Screenshot, checkpoint, video, trace, and structured deterministic evidence capture.
-- Screenshot and video evidence review with final PASS / FAIL / BLOCKED / MANUAL_REQUIRED reconciliation.
-- Canonical 13-issue regression execution with plan-hash verification and machine-readable blocked-reason taxonomy.
-- Planner reproducibility checks based on schema, safety, budget, and structural coverage contracts.
-
----
-
-## Current Limitations
-
-- Executability still depends on staging data, entity ownership, lifecycle state, and persona permissions.
-- Exact fixture policies intentionally block cases when the requested record is unavailable.
-- Deep or scrollable modal content may require scroll-aware, surface-scoped assertions.
-- Complex virtualized dropdowns and controls without accessible metadata may still require additional generic semantic interaction support.
-- Browser and API mutations are disabled by default. Approved browser mutation workflows may be enabled explicitly when deterministic cleanup is available; API mutations and persistent assessment edits remain guarded.
-- Some network, download, redirect, permission, and backend-side acceptance criteria require dedicated deterministic oracles.
-- LLM wording can vary between fresh plans; reproducibility checks validate structural and safety contracts rather than byte-identical JSON.
-
----
-
-## Validation and Reproducibility
-
-Run the canonical 13-issue regression:
-
-    QA_REGRESSION_PLAN_MODE=canonical \
-    QA_REGRESSION_RESUME=false \
-    QA_ALLOW_BROWSER_MUTATIONS=true \
-    QA_ALLOW_API_MUTATIONS=false \
-    QA_BROWSER_MUTATION_PREFLIGHT=false \
-    QA_ALLOW_BROWSER_EDIT_FLOWS=false \
-    QA_EVIDENCE_REVIEW=true \
-    bash scripts/run-final-13-regression.sh
-
-This execution profile matches the latest validated canonical run. Within the canonical suite, browser mutations are enabled only for workflows with deterministic cleanup. The default safety values in `.env.example` remain `false`.
-
-### Run a Fresh Multi-Issue Batch
-
-Generate fresh plans and smoke results for an arbitrary list of Jira issues:
+## Commands
 
 ```bash
-bash scripts/run-issue-batch.sh AS-1073 AS-1139
+npm install
+npx tsc --noEmit
+npm run plan -- --issue AS-1234
+npm run run
+npm run browser
+npm run smoke
 ```
 
-Batch artifacts and summaries are written under `qa-results/runs/`.
+Credentials and execution permissions are environment-specific. Do not print or commit secrets. Keep mutations and fixture provisioning disabled unless the exact run has explicit approval. Generated `qa-results/` artifacts are local evidence, not planner/source inputs to edit by hand.
 
-Check planner structural reproducibility for a Jira issue:
+## Result meanings
 
-    npm run check:planner-repro -- --issue AS-1066
+- `PASS`: applicable typed checks, deterministic proof, and safety gates passed.
+- `FAIL`: sufficient deterministic evidence contradicts a source-authorized check.
+- `BLOCKED`: a required route, entity, fixture, permission, or safety prerequisite is unavailable.
+- `MANUAL_REQUIRED`: execution/evidence exists but deterministic authority or completeness is insufficient.
+- `ERROR`: infrastructure prevented a reliable result.
 
-Planner reproducibility checks two fresh plans for schema validity, supported personas and actions, case budgets, fixture policy, mutation safety, and structural coverage consistency.
+`BLOCKED` and `MANUAL_REQUIRED` are correct safety outcomes, not downgraded PASS results.
 
----
+## Documentation
 
-## Example Workflow
+| Document | Purpose |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Authority boundaries and runtime pipeline |
+| [Regression runbook](docs/regression-runbook.md) | Fresh31 and Final-13 procedure |
+| [Final handoff](docs/final-handoff.md) | Evidence inventory, limitations, priorities |
+| [Demo script](docs/demo-script.md) | 5–10 minute evidence-based walkthrough |
+| [ADR-001](docs/ADR-001-browser-agent.md) | Original browser-agent decision (historical context) |
 
-    npm run plan -- --issue AS-1066
-    npm run browser -- --issue AS-1066
-    cat qa-results/report.md
-
-## Project Handoff
-
-See [HANDOFF.md](HANDOFF.md) for the latest validated canonical regression, delivered reliability capabilities, known limitations, and recommended next phase.
+The root [HANDOFF.md](HANDOFF.md) links to the current handoff; its former Final-13 description is historical context only.

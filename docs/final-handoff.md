@@ -1,0 +1,69 @@
+# Final documentation and handoff
+
+## Checkpoint
+
+This handoff describes the evidence-backed pre-final state, not an unrestricted automation claim.
+
+- Branch: `refactor/generic-browser-agent-v2`
+- Base pre-final commit: `be65ef56c49b64135c85d2e1d42e17681b4274c3`
+- Fresh31 frozen benchmark: `qa-results/runs/fresh31-prefinal-frozen-20260920-170933`
+- Final-13 matched-profile compatibility run: `qa-results/runs/final-13-canonical-matched-profile-20260921-154500`
+
+Artifacts under `qa-results/` are local evidence, intentionally excluded from commits.
+
+## Architecture milestone
+
+The runtime keeps source requirement, execution contract, runtime binding, fresh proof, visual review, and final verdict separate. The generic browser uses bounded semantic observe → one grounded action → re-observe behavior; ambiguous targets fail closed. Planner proposals may guide navigation but cannot create source/proof/verdict authority.
+
+AS-1311 is the practical safety example: a model `GOAL_ALREADY_SATISFIED` assessment did not override failure of the source-authorized `Download as PDF` requirement. The result was `FAIL`.
+
+## Fresh31 reproducibility
+
+| Run | PASS | FAIL | BLOCKED | MANUAL_REQUIRED | ERROR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 2 | 1 | 25 | 9 | 0 |
+| B | 2 | 1 | 25 | 9 | 0 |
+| C | 2 | 1 | 25 | 9 | 0 |
+
+31 frozen plans yielded 37 runtime cases. A–B status delta was zero; B–C status and technical deltas were zero; PASS asymmetry was zero. Result: `STABLE_CASE_AND_TECHNICAL`.
+
+## Final-13 compatibility
+
+Final-13 is historical compatibility evidence, not the current PASS target. The canonical plans/hashes were verified and a matched-profile run completed with zero confirmed agent regressions. Of old browser PASS results, three are now `FIXTURE_DRIFT` and five are `AMBIGUOUS_INDETERMINATE`. Historical/screenshot evidence does not supersede current source-bound deterministic proof.
+
+## Capability inventory
+
+| Capability | Evidence classification | Claim and limit |
+| --- | --- | --- |
+| Source-bound literal proof (AS-1058) | Current real UI | Exact authorized members can produce deterministic proof; limited to supported literal/member semantics |
+| False-PASS safety (AS-1311) | Current real UI safety boundary | Model-positive intent cannot override deterministic contradiction |
+| Runtime safety audit | Safety boundary proven | Audit gates verdicts; does not prove universal environment cleanliness |
+| Fixture/entity resolution | Safety boundary proven | Missing compatible state blocks safely; it is not provisioning |
+| Fresh31 A/B/C | Current frozen benchmark | Stable cohort replay; not an ML benchmark or product certification |
+| Structural search input | Partially proven | Narrow typed structural proof shape; not broad structural coverage |
+| Route discovery | Historical real UI, bounded | Safe probing/abstention; not universal recovery |
+| A1 action cycle | Partially proven | Grounded one-action cycle is tested; not a universal live guarantee |
+| Progression memory | Synthetic only | Bounded memory/budget mechanisms are tested; no dedicated real-UI proof of cross-case isolation or dead-path avoidance |
+| Query/filter handling | Partially proven | Bounded interaction is evidenced; no whole-ticket source-grounded AS-1011 proof |
+| State transitions | Historical real UI | Historical evidence exists; current unattended AS-1402 remains blocked |
+
+## Not production-ready
+
+- Unattended fixture provisioning and cleanup.
+- Controlled prerequisite success.
+- Full AS-1011 coverage.
+- Current unattended AS-1402 execution.
+- Local forensic or unwired prototype files.
+
+The fixture-cleanup setting is a policy signal, not universal proof of safe lifecycle cleanup. `BLOCKED` and `MANUAL_REQUIRED` are valid outcomes. Environment, fixture, permissions, product, and model behavior can drift; this cohort is not a general ML benchmark.
+
+## Prioritized next work
+
+1. Preserve/extend typed fixture authority.
+2. Add isolated provisioning only with exact cleanup proof.
+3. Add proof primitives only for real source-authorized semantics with bounded generic observations.
+4. Improve route diagnostics and first-blocker telemetry.
+5. Promote historical cases to current P5 claims only when comparable proof is necessary.
+6. Preserve planner authority as distinct from execution, proof, and verdict authority.
+
+Start debugging at source obligation and contract, then runtime route/target/entity/fixture binding, deterministic evidence, safety audit, and finally the separate case/ticket result layers.
