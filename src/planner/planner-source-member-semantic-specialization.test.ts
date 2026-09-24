@@ -119,6 +119,32 @@ test("source-defined surface members specialize without model member claims", ()
   assert.equal(partial.ir.candidates.length, 2);
 });
 
+test("exact source members and the bounded page suffix retain their own shells", () => {
+  const ctx = setup([
+    sourceUnit("surface", "Add a search bar to the Payments & All Payments page."),
+  ]);
+  const exact = run({ setup: ctx, candidates: [
+    { caseId: "payments", sourceId: "surface", target: "Payments" },
+    { caseId: "all-payments", sourceId: "surface", target: "All Payments" },
+  ] });
+  assert.equal(exact.ir.candidates.length, 2);
+  assert.ok(exact.ir.candidates.every((candidate) =>
+    candidate.sourceMemberSemanticSpecialization === undefined
+  ));
+
+  const page = run({ setup: ctx, candidates: [
+    { caseId: "payments", sourceId: "surface", target: "Payments page" },
+    { caseId: "all-payments", sourceId: "surface", target: "All Payments page" },
+  ] });
+  assert.equal(page.ir.candidates.length, 2);
+  assert.deepEqual(page.ir.candidates.map((candidate) =>
+    candidate.proposedTargetSurface
+  ).sort(), ["All Payments page", "Payments page"]);
+  assert.ok(page.ir.candidates.every((candidate) =>
+    candidate.sourceMemberSemanticSpecialization === undefined
+  ));
+});
+
 test("MODEL_MEMBER_CLAIM_ABSENCE_CANNOT_ERASE_UNAMBIGUOUS_SOURCE_MEMBER_V1", () => {
   const ctx = setup([sourceUnit(
     "target",

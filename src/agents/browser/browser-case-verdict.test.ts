@@ -109,6 +109,23 @@ test("authority-free discovery support is not a canonical verdict unit", () => {
   assert.equal(deriveBrowserCaseVerdict({ testCase: browserCase(), executionAuthority: authority() }).reason, "EXECUTION_CONTRACT_UNAVAILABLE");
 });
 
+test("a missing contract for an uncovered execution obligation cannot PASS", () => {
+  const mixedCoverageCase = browserCase({
+    acceptanceObligationIds: ["obligation-a", "obligation-b"],
+    executionVerdictScope: {
+      executionObligationIds: ["obligation-a", "obligation-b"],
+      verdictScopeObligationIds: ["obligation-a", "obligation-b"],
+      verdictAuthority: "INDEPENDENT",
+    },
+  });
+  const result = deriveBrowserCaseVerdict({
+    testCase: mixedCoverageCase,
+    executionAuthority: authority(),
+  });
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.reason, "EXECUTION_CONTRACT_UNAVAILABLE");
+});
+
 function executionIntent(
   routePolicy:
     NonNullable<

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { BrowserTestCase, PlannerAcceptanceObligationLedger, PlannerAcceptanceSourceLedger } from "../../planner/types.js";
+import { deriveBrowserExecutionCheckContract } from "../../planner/browser-execution-check-contract.js";
 import {
   BROWSER_OBSERVATION_DEFAULT_MAX_CONTROLS,
   type BrowserObservation,
@@ -658,6 +659,27 @@ test("shared authoritative obligations stay ambiguous rather than being assigned
 test("non-acceptance and unauthenticated cases remain outside source assertion promotion", () => {
   assert.deepEqual(buildBrowserSourceBoundAssertionSetRequirements({ testCase: browserCase({ persona: "unauthenticated" }), obligationLedger: ledger, sourceLedger, acceptedRoutePath: "/invoices" }), []);
   assert.deepEqual(buildBrowserSourceBoundAssertionSetRequirements({ testCase: browserCase(), obligationLedger: { ...ledger, obligations: [{ ...ledger.obligations[0]!, sourceRole: "TASK" }] }, sourceLedger, acceptedRoutePath: "/invoices" }), []);
+});
+
+test("source-authorized browser URL query presence is derived and evaluated from an exact browser assertion", () => {
+  const urlCase = browserCase({ id: "url-case", startRoute: "/company/payments", steps: [{ action: "selectRuntimeTopTab" }, { action: "assertUrlContains", text: "tab=", oracleId: "url-case:assertion-1" }] });
+  const urlSource: PlannerAcceptanceSourceLedger = { sourceStatus: "RESOLVED", basis: "ACCEPTANCE_CRITERIA", sourceUnits: [{ id: "url-ac", sourceKind: "ACCEPTANCE_CRITERIA", sourceRef: "jira:AS-url", text: "Track the active tab with tab parameter in the URL." }] };
+  const urlLedger: PlannerAcceptanceObligationLedger = { sourceStatus: "RESOLVED", derivationStatus: "RESOLVED", unresolvedSourceUnitIds: [], obligations: [{ id: "ob-1", sourceUnitIds: ["url-ac"], sourceRole: "TASK", derivation: "DIRECT_TASK_SECTION", text: "Track the active tab with tab parameter in the URL." }] };
+  const [requirement] = buildBrowserSourceBoundAssertionSetRequirements({ testCase: urlCase, obligationLedger: urlLedger, sourceLedger: urlSource, acceptedRoutePath: "/company/payments" });
+  assert.equal(requirement?.semanticFamily, "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1");
+  assert.deepEqual(requirement?.members, [{ action: "assertUrlContains", expectedText: "tab=", oracleId: "url-case:assertion-1" }]);
+  const contractCase = { ...urlCase, executionVerdictScope: { executionObligationIds: ["ob-1"], verdictScopeObligationIds: ["ob-1"], verdictAuthority: "INDEPENDENT" as const } };
+  const contract = deriveBrowserExecutionCheckContract({ testCase: contractCase, sourceBoundAssertionSetRequirements: [requirement!] });
+  const queryCheck = contract?.requiredChecks.find((check) => check.kind === "SOURCE_BOUND_ASSERTION_MEMBER");
+  assert.equal(queryCheck?.oracle.action, "assertUrlContains");
+  assert.equal(evaluateBrowserSourceBoundAssertionSet({ requirement: requirement!, deterministicEvidence: [{ stepIndex: 1, oracleId: "url-case:assertion-1", action: "assertUrlContains", expected: "tab=", passed: true, note: "URL assertion" }], actualPersona: "company_admin", actualRoutePath: "/company/payments", freshObservation: true }).result, "CONFIRMED");
+  assert.equal(evaluateBrowserSourceBoundAssertionSet({ requirement: requirement!, deterministicEvidence: [{ stepIndex: 1, oracleId: "url-case:assertion-1", action: "assertUrlContains", expected: "tab=", passed: false, note: "URL assertion" }], actualPersona: "company_admin", actualRoutePath: "/company/payments", freshObservation: true }).members[0]?.result, "CONTRADICTED");
+});
+
+test("API-shaped wording and planner-only query keys cannot manufacture query authority", () => {
+  const urlCase = browserCase({ id: "url-case", steps: [{ action: "assertUrlContains", text: "project=", oracleId: "url-case:assertion-1" }] });
+  const source: PlannerAcceptanceSourceLedger = { sourceStatus: "RESOLVED", basis: "ACCEPTANCE_CRITERIA", sourceUnits: [{ id: "url-ac", sourceKind: "ACCEPTANCE_CRITERIA", sourceRef: "jira:AS-url", text: "The API query uses project." }] };
+  assert.deepEqual(buildBrowserSourceBoundAssertionSetRequirements({ testCase: urlCase, obligationLedger: ledger, sourceLedger: source, acceptedRoutePath: "/control" }), []);
 });
 
 test("DISCOVERY_ONLY handoff telemetry remains MANUAL_REQUIRED at its caller even when source proof is complete", () => {

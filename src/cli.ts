@@ -9,6 +9,11 @@ import { readExecutionTestPlan } from "./planner/compiled-test-plan.js";
 import { discoverAuthenticatedTalentContractCandidates } from "./agents/browser/browser-route-talent-contract.js";
 import { buildContractFixtureRequirementContext } from "./agents/browser/fixtures/verified-contract-fixture-state.js";
 import { buildHumanResolutionSubmissionFromCandidate, buildTalentContractHumanResolutionCandidates, buildTalentContractHumanResolutionRequest } from "./agents/browser/human-execution-context.js";
+import {
+  getActiveBrowserRunArtifacts,
+  writeBrowserRunOperatorArtifacts,
+} from "./agents/browser/browser-run-artifacts.js";
+import { buildGenericBrowserUsefulnessExecutionProfile } from "./agents/browser/generic-browser-usefulness-execution-profile.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -49,12 +54,40 @@ const issueId = getArg("--issue") || getArg("--fixture");
     } else if (command === "browser") {
         const browserResults = await runBrowserCases();
         const plan = readCurrentPlan();
+        const artifacts = getActiveBrowserRunArtifacts();
 
         writeReport({
           issueId: issueId || "UNKNOWN",
           plan,
           browserResults,
+          ...(artifacts ? { outputPath: artifacts.reportPath } : {}),
       });
+        if (artifacts) {
+          const profile = buildGenericBrowserUsefulnessExecutionProfile();
+          writeBrowserRunOperatorArtifacts({
+            context: artifacts,
+            issueKey: String(plan.issueKey || issueId || "UNKNOWN"),
+            results: browserResults,
+            caseMetadataById: Object.fromEntries(
+              [...(plan.browserCases ?? []), ...(plan.discoveryBrowserCases ?? [])]
+                .map((testCase) => [testCase.id, { persona: testCase.persona }])
+            ),
+            executionProfile: {
+              genericSemanticAgent: true,
+              safeGenericExecution: profile.autonomousRuntime.genericBrowserReadOnlyExecution,
+              evidenceReview: profile.runnerPolicy.evidenceReview,
+              persistentBrowserMutations: profile.runnerPolicy.browserMutationsAllowed,
+              apiMutations: profile.runnerPolicy.apiMutationsAllowed,
+              fixtureProvisioning: profile.runnerPolicy.fixtureProvisioningAllowed,
+            },
+          });
+          console.log([
+            `Run artifacts: ${artifacts.runRoot}`,
+            `Summary: ${artifacts.summaryPath}`,
+            `Report: ${artifacts.reportPath}`,
+            `Machine result: ${artifacts.resultPath}`,
+          ].join("\n"));
+        }
     } else if (command === "smoke") {
       console.log("\nSmoke Test starting...");
 

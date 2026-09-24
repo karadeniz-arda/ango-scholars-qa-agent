@@ -61,11 +61,7 @@ export type ExecuteBrowserReadOnlyProposalArgs = {
 
 function readOnlyExecutionEnabled():
   boolean {
-  return (
-    process.env
-      .QA_GENERIC_BROWSER_READONLY_EXECUTION ===
-    "true"
-  );
+  return process.env.QA_GENERIC_BROWSER_READONLY_EXECUTION !== "false";
 }
 
 function normalize(

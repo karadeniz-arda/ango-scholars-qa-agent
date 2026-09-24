@@ -89,6 +89,7 @@ export function deriveBrowserExecutionCheckContract(args: {
   ].sort();
   const executionObligationIdSet = new Set(executionObligationIds);
   const checks: BrowserExecutionCheckRequirement[] = [];
+  const coveredObligationIds = new Set<string>();
 
   for (const requirement of args.sourceBoundAssertionSetRequirements ?? []) {
     if (
@@ -119,6 +120,7 @@ export function deriveBrowserExecutionCheckContract(args: {
         sourceRefs: [...new Set(requirement.sourceRefs)].sort(),
       });
     }
+    coveredObligationIds.add(requirement.obligationId);
   }
 
   for (const requirement of args.structuralControlPresenceRequirements ?? []) {
@@ -143,6 +145,7 @@ export function deriveBrowserExecutionCheckContract(args: {
       sourceUnitIds: [...new Set(requirement.sourceUnitIds)].sort(),
       sourceRefs: [...new Set(requirement.sourceRefs)].sort(),
     });
+    coveredObligationIds.add(requirement.obligationId);
   }
 
   for (const obligationId of executionObligationIds) {
@@ -158,6 +161,7 @@ export function deriveBrowserExecutionCheckContract(args: {
       authority: "SOURCE_AUTHORIZED",
       requirementId: dispatch.candidate.requirementId,
     });
+    coveredObligationIds.add(obligationId);
   }
 
   const expectedExecutionCaseId = executionCaseIdentity(args.testCase);
@@ -180,10 +184,23 @@ export function deriveBrowserExecutionCheckContract(args: {
       bindingId: binding.bindingId,
       evidenceContractId: binding.evidenceContractId,
     });
+    coveredObligationIds.add(binding.obligationId);
   }
 
   const checkIds = checks.map((check) => check.checkId);
   if (new Set(checkIds).size !== checkIds.length) return null;
+
+  /*
+   * A non-empty contract may never silently prove only a subset of the
+   * execution scope. An entirely unsupported scope remains explicitly empty
+   * for diagnostics; a mixed scope fails closed before case verdicting.
+   */
+  if (
+    checks.length > 0 &&
+    executionObligationIds.some((obligationId) =>
+      !coveredObligationIds.has(obligationId)
+    )
+  ) return null;
 
   return {
     schemaVersion: 1,

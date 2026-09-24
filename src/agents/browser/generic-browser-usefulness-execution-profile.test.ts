@@ -187,6 +187,31 @@ test(
 );
 
 test(
+  "defaults to generic safe execution and evidence review, with explicit disable overrides",
+  () => {
+    const defaults = buildGenericBrowserUsefulnessExecutionProfile({
+      planFilePath: "__missing-plan__",
+      env: {},
+    });
+    assert.equal(defaults.autonomousRuntime.genericBrowserReadOnlyExecution, true);
+    assert.equal(defaults.runnerPolicy.evidenceReview, true);
+    assert.equal(defaults.autonomousRuntime.genericBrowserShadow, false);
+    assert.equal(defaults.runnerPolicy.browserMutationsAllowed, false);
+    assert.equal(defaults.runnerPolicy.apiMutationsAllowed, false);
+
+    const disabled = buildGenericBrowserUsefulnessExecutionProfile({
+      planFilePath: "__missing-plan__",
+      env: {
+        QA_GENERIC_BROWSER_READONLY_EXECUTION: "false",
+        QA_EVIDENCE_REVIEW: "false",
+      },
+    });
+    assert.equal(disabled.autonomousRuntime.genericBrowserReadOnlyExecution, false);
+    assert.equal(disabled.runnerPolicy.evidenceReview, false);
+  }
+);
+
+test(
   "preserves exact versus case-insensitive runtime boolean semantics",
   () => {
     const profile =
@@ -225,13 +250,13 @@ test(
     assert.equal(
       profile.autonomousRuntime
         .genericBrowserReadOnlyExecution,
-      false
+      true
     );
 
     assert.equal(
       profile.runnerPolicy
         .evidenceReview,
-      false
+      true
     );
 
     assert.equal(

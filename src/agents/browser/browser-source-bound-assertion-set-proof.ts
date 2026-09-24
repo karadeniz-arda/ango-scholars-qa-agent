@@ -24,6 +24,7 @@ import {
 
 export type BrowserSourceBoundAssertionMember = {
   action:
+    | "assertUrlContains"
     | "assertTextVisible"
     | "assertTextNotVisible"
     | "assertExactVisibleButton";
@@ -68,7 +69,8 @@ export type BrowserSourceBoundAssertionSetRequirement = {
   semanticFamily:
     | "EXPLICIT_ENUMERATED_PRESENCE"
     | "EXPLICIT_ENUMERATED_ABSENCE"
-    | "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1";
+    | "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1"
+    | "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1";
   memberPolicy: "ALL_REQUIRED";
   members: BrowserSourceBoundAssertionMember[];
 };
@@ -88,7 +90,10 @@ export function hasApprovedCaseLevelSourceBoundAssertionAuthority(
     requirement.sourceRole === "TASK" &&
     requirement.derivation === "DIRECT_TASK_SECTION" &&
     requirement.proofAuthority === "DIRECT_TASK" &&
-    requirement.semanticFamily === "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1"
+    (
+      requirement.semanticFamily === "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1" ||
+      requirement.semanticFamily === "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1"
+    )
   );
 }
 
@@ -117,6 +122,7 @@ export type BrowserRuntimeSourceAssertionAllocation = {
     | "EXPLICIT_ENUMERATED_PRESENCE"
     | "EXPLICIT_ENUMERATED_ABSENCE"
     | "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1"
+    | "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1"
     | "OTHER";
   state:
     | "SUPPORTED_AND_BOUND"
@@ -230,6 +236,20 @@ function sourceSupportsMember(sourceText: string, member: BrowserSourceBoundAsse
   const expected = normalized(member.expectedText);
   if (!expected || !source.includes(expected)) return false;
   return member.action !== "assertTextNotVisible" || /\b(?:no longer shown|not shown|not visible|absent|removed from (?:the )?ui|does not display)\b/.test(source);
+}
+
+/**
+ * SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1
+ *
+ * Browser query authority is intentionally narrower than generic URL prose:
+ * the source must name both URL state and the exact query parameter. Runtime,
+ * API, and network observations never participate in this derivation.
+ */
+function sourceBrowserQueryPresenceKey(sourceText: string): string | null {
+  const source = normalized(sourceText);
+  if (!/\burl\b/.test(source) || !/\b(?:track|tracked|tracking|reflect|reflected|synchroni[sz]e|update)\b/.test(source)) return null;
+  const match = source.match(/\b([a-z][a-z0-9_.-]*)\s+(?:query\s+)?(?:parameter|param|key)\b/);
+  return match?.[1] ?? null;
 }
 
 function sourceEnumeratedMembers(args: {
@@ -384,7 +404,7 @@ function canonicalAssertions(testCase: BrowserTestCase): BrowserSourceBoundAsser
   const seen = new Set<string>();
   const members: BrowserSourceBoundAssertionMember[] = [];
   for (const step of testCase.steps ?? []) {
-    if ((step.action !== "assertTextVisible" && step.action !== "assertTextNotVisible") || !step.oracleId) continue;
+    if ((step.action !== "assertTextVisible" && step.action !== "assertTextNotVisible" && step.action !== "assertUrlContains") || !step.oracleId) continue;
     const member = { action: step.action, expectedText: String(step.text || "").trim(), oracleId: step.oracleId } as BrowserSourceBoundAssertionMember;
     const key = [member.action, normalized(member.expectedText), member.oracleId].join("|");
     if (member.expectedText && !seen.has(key)) { seen.add(key); members.push(member); }
@@ -463,8 +483,17 @@ export function buildBrowserSourceBoundAssertionSetRequirements(args: {
         const directMember = directUiMemberPresence(source.text);
         const directTask = obligation.sourceRole === "TASK" &&
           obligation.derivation === "DIRECT_TASK_SECTION";
-        if (obligation.sourceRole === "TASK" && (!directTask || !directMember)) return [];
-        const semanticFamily = directMember &&
+        const queryKey = sourceBrowserQueryPresenceKey(source.text);
+        if (obligation.sourceRole === "TASK" && (!directTask || (!directMember && !queryKey))) return [];
+        const sourceBoundUrlMembers = queryKey
+          ? assertions.filter((member) =>
+              member.action === "assertUrlContains" &&
+              normalized(member.expectedText) === `${queryKey}=`
+            )
+          : [];
+        const semanticFamily = sourceBoundUrlMembers.length === 1
+          ? "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1" as const
+          : directMember &&
           (obligation.sourceRole === "ACCEPTANCE" || directTask)
           ? "SOURCE_DERIVED_UI_MEMBER_PRESENCE_V1" as const
           : semanticFamilyForSourceText(source.text);
@@ -505,7 +534,9 @@ export function buildBrowserSourceBoundAssertionSetRequirements(args: {
                 sourceUnitId: source.id,
               })
             : [];
-        const members = buttonCarrier
+        const members = semanticFamily === "SOURCE_BOUND_BROWSER_QUERY_PRESENCE_V1"
+          ? sourceBoundUrlMembers
+          : buttonCarrier
           ? [{
               action: "assertExactVisibleButton" as const,
               expectedText: directMember!.member,

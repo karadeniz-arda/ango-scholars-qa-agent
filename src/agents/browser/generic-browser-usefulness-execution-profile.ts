@@ -130,9 +130,7 @@ export function buildGenericBrowserUsefulnessExecutionProfile(
        * applying one generic boolean parser everywhere.
        */
       evidenceReview:
-        exactTrue(
-          env.QA_EVIDENCE_REVIEW
-        ),
+        env.QA_EVIDENCE_REVIEW !== "false",
 
       apiMutationsAllowed:
         caseInsensitiveTrue(
@@ -168,15 +166,10 @@ export function buildGenericBrowserUsefulnessExecutionProfile(
 
     autonomousRuntime: {
       genericBrowserShadow:
-        exactTrue(
-          env.QA_GENERIC_BROWSER_SHADOW
-        ),
+        exactTrue(env.QA_GENERIC_BROWSER_SHADOW),
 
       genericBrowserReadOnlyExecution:
-        exactTrue(
-          env
-            .QA_GENERIC_BROWSER_READONLY_EXECUTION
-        ),
+        env.QA_GENERIC_BROWSER_READONLY_EXECUTION !== "false",
 
       genericBrowserModel:
         resolveGenericBrowserModel(env),

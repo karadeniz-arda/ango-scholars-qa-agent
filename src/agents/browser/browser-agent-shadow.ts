@@ -133,6 +133,13 @@ observation: BrowserObservation;
       evaluation: BrowserShadowProposalEvaluation;
     }
   | {
+      status: "EVALUATED";
+      note: string;
+      observation: BrowserObservation;
+      proposal: BrowserShadowProposal;
+      evaluation: BrowserShadowProposalEvaluation;
+    }
+  | {
       status: "ERROR";
       note: string;
     };
@@ -676,7 +683,7 @@ Rules:
   );
 }
 
-function shadowEnabled(): boolean {
+function shadowRecordingEnabled(): boolean {
   return (
     process.env
       .QA_GENERIC_BROWSER_SHADOW ===
@@ -742,14 +749,6 @@ function writeJsonAtomically(
 export async function runGenericBrowserShadow(
   args: RunBrowserShadowArgs
 ): Promise<BrowserShadowRunResult> {
-  if (!shadowEnabled()) {
-    return {
-      status: "SKIPPED",
-      note:
-        "Generic browser shadow mode is disabled.",
-    };
-  }
-
   try {
     const observation =
       await observeBrowserPage(
@@ -883,17 +882,23 @@ export async function runGenericBrowserShadow(
       },
     };
 
-    writeJsonAtomically(
-      artifactPath,
-      artifact
-    );
+    if (shadowRecordingEnabled()) {
+      writeJsonAtomically(artifactPath, artifact);
+    }
 
+    if (shadowRecordingEnabled()) {
+      return {
+        status: "RECORDED",
+        note: `Generic browser shadow proposal recorded: ${artifactPath}`,
+        artifactPath,
+        observation,
+        proposal,
+        evaluation,
+      };
+    }
     return {
-      status: "RECORDED",
-      note:
-        `Generic browser shadow proposal recorded: ` +
-        `${artifactPath}`,
-      artifactPath,
+      status: "EVALUATED",
+      note: "Generic browser proposal evaluated without shadow recording.",
       observation,
       proposal,
       evaluation,

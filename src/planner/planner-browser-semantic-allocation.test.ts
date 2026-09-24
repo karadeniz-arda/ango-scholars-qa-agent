@@ -526,7 +526,8 @@ test("source-authorized entity fixture requirements cannot be reclassified as su
       fixtureNeeds: ["invoice dataset"],
     })),
   });
-  assert.equal(result.plan.browserCases.length, 0);
+  assert.equal(result.plan.browserCases.length, 2);
+  assert.equal(result.plan.discoveryBrowserCases, undefined);
   assert.ok(result.plan.browserSemanticPlanningAudit?.executionContainers
     ?.every((item) => item.executionSurfacePrerequisite === undefined));
 });
@@ -678,7 +679,7 @@ test("AS-1093-style separate task units remain UNKNOWN_GROUPING with no surface 
     plan.browserSemanticPlanningAudit?.sourceBackedAtomicSurfacePartitions,
     []
   );
-  assert.equal(plan.browserCases.length, 0);
+  assert.equal(plan.browserCases.length, 2);
 });
 
 test("single obligation becomes one stable atomic verdict case", () => {
@@ -755,12 +756,12 @@ test("explicit authoritative independence produces distinct verdict contracts", 
       semanticCandidate("b", "b", ["obligation-2"], ctx.obligationLedger),
     ],
   });
-  assert.equal(result.plan.browserCases.length, 2);
+  assert.equal(result.plan.browserCases.length, 3);
   assert.notEqual(
     result.plan.browserCases[0]?.semanticVerdictContract?.verdictGroupId,
     result.plan.browserCases[1]?.semanticVerdictContract?.verdictGroupId
   );
-  for (const testCase of result.plan.browserCases) {
+  for (const testCase of result.plan.browserCases.filter((item) => item.semanticVerdictContract)) {
     assert.deepEqual(
       testCase.executionVerdictScope?.executionObligationIds,
       testCase.executionVerdictScope?.verdictScopeObligationIds
@@ -911,7 +912,7 @@ test("dependent group is not materialized when its prerequisite has no safe case
       semanticCandidate("b", "b", ["obligation-2"], ctx.obligationLedger),
     ],
   });
-  assert.equal(result.plan.browserCases.length, 0);
+  assert.equal(result.plan.browserCases.length, 1);
   assert.equal(
     result.plan.browserSemanticPlanningAudit?.contracts.find(
       (item) => item.relationship === "DEPENDS_ON"
@@ -958,7 +959,7 @@ test("same route persona fixture and proof family do not merge independent group
       semanticCandidate("b", "b", ["obligation-2"], ctx.obligationLedger),
     ],
   });
-  assert.equal(result.plan.browserCases.length, 2);
+  assert.equal(result.plan.browserCases.length, 3);
 });
 
 test("manual sibling remains ticket-accounted and cannot leak into automated case", () => {
@@ -977,7 +978,7 @@ test("manual sibling remains ticket-accounted and cannot leak into automated cas
     ],
     bindingStates: ["SUPPORTED_AND_BOUND", "MANUAL_BY_NATURE"],
   });
-  assert.equal(result.plan.browserCases.length, 1);
+  assert.equal(result.plan.browserCases.length, 2);
   assert.deepEqual(result.plan.browserCases[0]?.manualChecks, []);
   assert.deepEqual(result.plan.browserSemanticPlanningAudit?.ticketManualObligationIds, ["obligation-2"]);
 });
@@ -1098,7 +1099,7 @@ test("conflicting authoritative routes fail closed", () => {
     texts: ["Company users can verify behavior."],
     cases: [browserCase("candidate-1", { conflictingRoute: true })],
   });
-  assert.equal(result.plan.browserCases.length, 0);
+  assert.equal(result.plan.browserCases.length, 1);
   assert.deepEqual(
     result.plan.browserSemanticPlanningAudit?.navigationUnresolvedObligationIds,
     ["obligation-1"]
@@ -1174,7 +1175,8 @@ test("fixture speculation and ambiguous identity fail closed", () => {
       },
     })],
   });
-  assert.equal(result.plan.browserCases.length, 0);
+  assert.equal(result.plan.browserCases.length, 1);
+  assert.equal(result.plan.discoveryBrowserCases, undefined);
   assert.deepEqual(result.plan.browserSemanticPlanningAudit?.fixtureUnavailableObligationIds, ["obligation-1"]);
 });
 
@@ -1326,7 +1328,7 @@ test("unknown grouping permits isolated obligation evidence planning without cas
   });
 
   assert.equal(result.grouping.groups[0]?.relationship, "UNKNOWN");
-  assert.equal(result.plan.browserCases.length, 0);
+  assert.equal(result.plan.browserCases.length, 1);
   assert.deepEqual(
     result.plan.browserSemanticPlanningAudit?.evidenceContracts?.map(
       (item) => item.obligationId
@@ -2100,7 +2102,7 @@ test("an atomic practical case cannot claim another source-required state", () =
   const container = plan.browserSemanticPlanningAudit?.executionContainers?.[0];
   assert.equal(container?.runtimeFixtureResolution, undefined);
   assert.equal(container?.readiness, "FIXTURE_UNAVAILABLE");
-  assert.equal(plan.browserCases.length, 0);
+  assert.equal(plan.browserCases.length, 1);
 });
 
 function fourAtomicInvoiceContexts(reverse = false) {
@@ -3639,8 +3641,8 @@ test("source-authoritative read-only unresolved navigation materializes for boun
   });
   const container = result.plan.browserSemanticPlanningAudit
     ?.executionContainers?.[0];
-  const materialized = result.plan.discoveryBrowserCases?.find((item) =>
-    item.id.startsWith("web-runtime-navigation-discovery-")
+  const materialized = result.plan.browserCases.find((item) =>
+    item.id.startsWith("web-runtime-navigation-")
   );
   assert.equal(container?.target.sourceScope.status, "AUTHORITATIVE");
   assert.equal(container?.target.constraint.status, "COMPATIBLE");
@@ -3655,7 +3657,7 @@ test("source-authoritative read-only unresolved navigation materializes for boun
   assert.equal(materialized?.startRoute, "UNKNOWN");
   assert.equal(materialized?.goal, unresolved.goal);
   assert.equal(materialized?.successCriteria, unresolved.successCriteria);
-  assert.deepEqual(materialized?.executionPolicy, { lane: "DISCOVERY_ONLY" });
+  assert.equal(materialized?.executionPolicy, undefined);
   assert.deepEqual(materialized?.acceptanceObligationIds, ["obligation-1"]);
   assert.equal(materialized?.executionIntentAuthority?.caseId, materialized?.id);
   assert.deepEqual(materialized?.executionIntentAuthority?.personaPolicy, {
@@ -3675,8 +3677,8 @@ test("source-authoritative read-only unresolved navigation materializes for boun
     materialized?.executionIntentAuthority?.executionCheckContract?.requiredChecks.length,
     0
   );
-  assert.equal(result.plan.browserCases.length, 0);
-  assert.equal(result.plan.discoveryBrowserCases?.length, 1);
+  assert.equal(result.plan.browserCases.length, 1);
+  assert.equal(result.plan.discoveryBrowserCases, undefined);
 });
 
 test("source-silent read-only discovery uses configured persona without laundering source authority", () => {
@@ -3701,8 +3703,8 @@ test("source-silent read-only discovery uses configured persona without launderi
       }
     )],
   });
-  const materialized = result.plan.discoveryBrowserCases?.find((item) =>
-    item.id.startsWith("web-runtime-navigation-discovery-")
+  const materialized = result.plan.browserCases.find((item) =>
+    item.id.startsWith("web-runtime-navigation-")
   );
   assert.deepEqual(materialized?.executionIntentAuthority?.personaPolicy, {
     kind: "CONFIGURED_EXECUTION_PERSONA",
@@ -3883,8 +3885,8 @@ test("runtime discovery does not promote semantic direct Task prose into exact a
       { targetSurface: text, persona: "talent" }
     )],
   });
-  const materialized = result.plan.discoveryBrowserCases?.find((item) =>
-    item.id.startsWith("web-runtime-navigation-discovery-")
+  const materialized = result.plan.browserCases.find((item) =>
+    item.id.startsWith("web-runtime-navigation-")
   );
   assert.ok(materialized);
   assert.deepEqual(materialized?.acceptanceObligationIds, []);
@@ -3912,8 +3914,8 @@ test("runtime-bindable discovery retains independently source-authorized checks 
       { targetSurface: "Experimental workflow queue", persona: "company_admin" }
     )],
   });
-  const materialized = result.plan.discoveryBrowserCases?.find((item) =>
-    item.id.startsWith("web-runtime-navigation-discovery-")
+  const materialized = result.plan.browserCases.find((item) =>
+    item.id.startsWith("web-runtime-navigation-")
   );
   assert.ok(materialized?.executionIntentAuthority);
   assert.equal(materialized?.startRoute, "UNKNOWN");
@@ -3969,10 +3971,10 @@ test("runtime discovery transports only ACCEPTANCE-role obligations", () => {
   });
 
   const materialized =
-    result.plan.discoveryBrowserCases?.find(
+    result.plan.browserCases.find(
       (item) =>
         item.id.startsWith(
-          "web-runtime-navigation-discovery-"
+          "web-runtime-navigation-"
         )
     );
 
@@ -4031,8 +4033,8 @@ test("runtime navigation discovery admits source-authoritative deferred targets 
     const container = result.plan.browserSemanticPlanningAudit
       ?.executionContainers?.[0];
 
-    const materialized = result.plan.discoveryBrowserCases?.find((item) =>
-      item.id.startsWith("web-runtime-navigation-discovery-")
+    const materialized = result.plan.browserCases.find((item) =>
+      item.id.startsWith("web-runtime-navigation-")
     );
 
     if (example.expectedEligible) {
@@ -4049,18 +4051,11 @@ test("runtime navigation discovery admits source-authoritative deferred targets 
 
       assert.ok(materialized);
       assert.equal(materialized?.startRoute, "UNKNOWN");
-      assert.deepEqual(
-        materialized?.executionPolicy,
-        { lane: "DISCOVERY_ONLY" }
-      );
-      assert.deepEqual(
-        materialized?.deterministicProofBindings,
-        []
-      );
+      assert.equal(materialized?.executionPolicy, undefined);
+      assert.equal(materialized?.deterministicProofBindings, undefined);
 
-      // Discovery remains separate from normal proof/verdict execution.
-      assert.equal(result.plan.browserCases.length, 0);
-      assert.equal(result.plan.discoveryBrowserCases?.length, 1);
+      assert.equal(result.plan.browserCases.length, 1);
+      assert.equal(result.plan.discoveryBrowserCases, undefined);
     } else {
       assert.notEqual(
         container?.discoveryAdmission?.status,
@@ -4271,7 +4266,7 @@ test("composed materialization still requires target, session, and safe action s
     )] }).plan;
   };
   const wrongTarget = make("Company payment invoices", "talent");
-  assert.equal(wrongTarget.browserCases.length, 0);
+  assert.equal(wrongTarget.browserCases.length, 1);
   assert.equal(wrongTarget.browserSemanticPlanningAudit?.executionContainers?.[0]?.composedRuntimeResolution, undefined);
   const wrongActor = make("Talent contract details", "company_admin");
   assert.equal(

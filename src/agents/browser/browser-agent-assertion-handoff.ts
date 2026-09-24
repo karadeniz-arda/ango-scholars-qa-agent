@@ -103,7 +103,9 @@ export function buildGenericBrowserAssertionHandoffCase(
     sourceBoundAssertionSetRequirements.length > 0
       ? sourceBoundAssertionSetRequirements.flatMap((requirement) =>
           requirement.members.flatMap((member) =>
-            member.action === "assertTextVisible" || member.action === "assertTextNotVisible"
+            member.action === "assertTextVisible" ||
+            member.action === "assertTextNotVisible" ||
+            member.action === "assertUrlContains"
               ? [{
                   action: member.action,
                   text: member.expectedText,

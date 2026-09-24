@@ -79,6 +79,14 @@ export type BrowserStep =
     action: "clickButton";
     text: string;
     interactionId?: string;
+    /** Runtime compatibility navigation may assist execution but never adds proof authority. */
+    compatibilityNavigation?: "ADVISORY";
+    /**
+     * This interaction must establish a fresh semantic surface before later
+     * assertions may contribute deterministic evidence. It is an execution
+     * precondition only: it never authorizes an acceptance requirement.
+     */
+    assertionSurfaceGrounding?: "REQUIRED";
     contextText?: string;
     verifyExpandedSurface?: boolean;
   }

@@ -55,7 +55,7 @@ test("final artifact removes raw semantic candidates while retaining cloned diag
   const compiled = finalizeCompiledTestPlanArtifact({
     compilationInputPlan: input,
     plannerDiagnostics: { rawSemanticCandidates: clonePlannerSemanticCandidateProposals(rawCandidates) },
-    compilationSummary: { version: "V1", apiCaseCount: 0, proposedBrowserCaseCount: 1, semanticCandidateCount: 1, rejectedSemanticCandidateCount: 0, trustedBrowserCaseCount: 0, discoveryBrowserCaseCount: 0, effectiveBrowserRuntimeCaseCount: 0, effectiveRuntimeUnitCount: 0 },
+    compilationSummary: { version: "V1", apiCaseCount: 0, proposedBrowserCaseCount: 1, semanticCandidateCount: 1, rejectedSemanticCandidateCount: 0, browserCaseCount: 0, effectiveBrowserRuntimeCaseCount: 0, effectiveRuntimeUnitCount: 0 },
   });
   assert.equal(Object.prototype.hasOwnProperty.call(compiled, "browserSemanticCandidates"), false);
   assert.deepEqual(compiled.plannerDiagnostics?.rawSemanticCandidates, rawCandidates);

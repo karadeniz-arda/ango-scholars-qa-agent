@@ -73,11 +73,15 @@ test(
           contextText:
             "Language Requirements",
           verifyExpandedSurface: true,
+          compatibilityNavigation: "ADVISORY",
         },
-        {
-          action: "clickButton",
-          text: "Level Adjustment",
-        },
+      {
+        action: "clickButton",
+        text: "Level Adjustment",
+        compatibilityNavigation: "ADVISORY",
+        assertionSurfaceGrounding: "REQUIRED",
+        verifyExpandedSurface: true,
+      },
       ]
     );
 
