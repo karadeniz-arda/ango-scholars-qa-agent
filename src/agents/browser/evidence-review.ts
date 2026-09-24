@@ -124,9 +124,7 @@ type ReviewBrowserEvidenceArgs = {
 };
 
 function evidenceReviewEnabled(): boolean {
-  return (
-    process.env.QA_EVIDENCE_REVIEW === "true"
-  );
+  return process.env.QA_EVIDENCE_REVIEW !== "false";
 }
 
 function cleanJsonOutput(raw: string): string {

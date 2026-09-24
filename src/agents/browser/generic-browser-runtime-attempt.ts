@@ -138,6 +138,9 @@ export async function runGenericBrowserRuntimeAttempt(args: {
         progressionHistory:
           genericBrowserProgressionHistory,
       });
+    const proposalEvaluated =
+      shadowResult.status === "RECORDED" ||
+      shadowResult.status === "EVALUATED";
 
     /*
      * Preserve the existing capability-recognition settlement bridge.
@@ -147,7 +150,7 @@ export async function runGenericBrowserRuntimeAttempt(args: {
      */
     if (
       pendingOperationalCapabilityTransition &&
-      shadowResult.status === "RECORDED"
+      proposalEvaluated
     ) {
       const recognition =
         recognizeOperationalCapabilityTransition({
@@ -166,7 +169,7 @@ export async function runGenericBrowserRuntimeAttempt(args: {
     }
 
     if (
-      shadowResult.status === "RECORDED"
+      proposalEvaluated
     ) {
       genericBrowserUsefulnessEvents.push({
         kind: "OBSERVATION_RECORDED",
@@ -195,7 +198,7 @@ export async function runGenericBrowserRuntimeAttempt(args: {
     }
 
     if (
-      shadowResult.status === "RECORDED"
+      proposalEvaluated
     ) {
       genericBrowserUsefulnessEvents.push(
         {
@@ -203,8 +206,9 @@ export async function runGenericBrowserRuntimeAttempt(args: {
           iteration: genericBrowserIteration,
           decision:
             shadowResult.proposal.decision,
-          artifactPath:
-            shadowResult.artifactPath,
+          ...(shadowResult.status === "RECORDED"
+            ? { artifactPath: shadowResult.artifactPath }
+            : {}),
         },
         {
           kind: "EVALUATION_RECORDED",
@@ -227,7 +231,7 @@ export async function runGenericBrowserRuntimeAttempt(args: {
     }
 
     if (
-      shadowResult.status !== "RECORDED"
+      !proposalEvaluated
     ) {
       genericBrowserStopReason =
         shadowResult.status;

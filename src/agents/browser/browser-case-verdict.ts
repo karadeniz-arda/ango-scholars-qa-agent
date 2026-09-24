@@ -52,11 +52,28 @@ export type BrowserCaseVerdictReason =
 export type BrowserCaseVerdictResult = {
   verdict: BrowserCaseVerdict;
   reason: BrowserCaseVerdictReason;
+  /** Presentation-only first failed prerequisite; never changes the verdict. */
+  blockerDiagnostic?: string;
   requiredCheckIds: string[];
   passedCheckIds: string[];
   failedCheckIds: string[];
   missingCheckIds: string[];
 };
+
+/** Presentation-only decomposition of the existing execution-context gate. */
+export function executionContextBlocker(
+  authority: BrowserCaseExecutionAuthority,
+  testCase: BrowserTestCase
+): string | null {
+  if (authority.actualPersona.status !== "AVAILABLE") return "ACTUAL_PERSONA_UNAVAILABLE";
+  if (authority.actualPersona.value !== testCase.persona) return "PERSONA_MISMATCH";
+  if (authority.acceptedRoutePath.status !== "AVAILABLE") return "ACCEPTED_ROUTE_UNAVAILABLE";
+  const routePolicy = testCase.executionIntentAuthority?.sourceTargetEnvelope.routePolicy;
+  if (routePolicy?.kind === "PREBOUND_EXACT" && routePolicy.authority === "SOURCE_ROUTE" && authority.acceptedRoutePath.value !== routePolicy.route) return "SOURCE_ROUTE_MISMATCH";
+  if (authority.targetVerified.status !== "AVAILABLE") return "TARGET_VERIFICATION_UNAVAILABLE";
+  if (authority.targetVerified.value !== true) return "TARGET_VERIFICATION_FAILED";
+  return null;
+}
 
 /** Discovery support execution is operational unless it owns local acceptance scope. */
 export function isOperationalDiscoverySupportUnit(testCase: BrowserTestCase): boolean {
@@ -108,11 +125,13 @@ function unavailableResult(
     "EXECUTION_CONTRACT_UNAVAILABLE" | "EXECUTION_CONTEXT_UNAVAILABLE" |
     "FIXTURE_UNAVAILABLE" | "RUNTIME_AUDIT_INCOMPLETE" | "UNSAFE_EXECUTION" |
     "PRODUCT_MUTATION_OBSERVED" | "PERSISTENCE_VIOLATION" | "TEST_DATA_ISSUE">,
-  contract?: BrowserExecutionCheckContract
+  contract?: BrowserExecutionCheckContract,
+  blockerDiagnostic?: string
 ): BrowserCaseVerdictResult {
   return {
     verdict: "BLOCKED",
     reason,
+    ...(blockerDiagnostic ? { blockerDiagnostic } : {}),
     requiredCheckIds: contract?.requiredChecks.map((check) => check.checkId) ?? [],
     passedCheckIds: [],
     failedCheckIds: [],
@@ -607,20 +626,6 @@ export function deriveBrowserCaseVerdict(args: {
     return unavailableResult("EXECUTION_CONTRACT_UNAVAILABLE");
   }
   const authority = args.executionAuthority;
-  const acceptedRoutePath =
-    authority.acceptedRoutePath.status === "AVAILABLE"
-      ? authority.acceptedRoutePath.value
-      : null;
-  const routePolicy =
-    args.testCase.executionIntentAuthority
-      ?.sourceTargetEnvelope
-      .routePolicy;
-  const explicitSourceRouteMismatch =
-    acceptedRoutePath !== null &&
-    routePolicy?.kind === "PREBOUND_EXACT" &&
-    routePolicy.authority === "SOURCE_ROUTE" &&
-    acceptedRoutePath !== routePolicy.route;
-
   /*
    * PHASE2_RUNTIME_ROUTE_AUTHORITY_V1
    *
@@ -629,14 +634,8 @@ export function deriveBrowserCaseVerdict(args: {
    * bounded navigation. Only a route explicitly constrained by source remains
    * a hard case-verdict route constraint.
    */
-  if (
-    authority.actualPersona.status !== "AVAILABLE" ||
-    authority.actualPersona.value !== args.testCase.persona ||
-    acceptedRoutePath === null ||
-    explicitSourceRouteMismatch ||
-    authority.targetVerified.status !== "AVAILABLE" ||
-    authority.targetVerified.value !== true
-  ) return unavailableResult("EXECUTION_CONTEXT_UNAVAILABLE", contract);
+  const contextBlocker = executionContextBlocker(authority, args.testCase);
+  if (contextBlocker) return unavailableResult("EXECUTION_CONTEXT_UNAVAILABLE", contract, contextBlocker);
   if (
     authority.fixtureStatus.status !== "AVAILABLE" ||
     !["READY", "NOT_REQUIRED"].includes(authority.fixtureStatus.value)

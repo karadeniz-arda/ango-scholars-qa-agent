@@ -240,6 +240,21 @@ test("GROUP_ONLY contracts include only execution-scope requirements", () => {
   assert.equal(contract?.requiredChecks[0]?.kind, "SOURCE_BOUND_ASSERTION_MEMBER");
 });
 
+test("a supported check cannot create a partial contract for an uncovered execution obligation", () => {
+  const testCase = browserCase({
+    acceptanceObligationIds: ["obligation-a", "obligation-b"],
+    executionVerdictScope: {
+      executionObligationIds: ["obligation-a", "obligation-b"],
+      verdictScopeObligationIds: ["obligation-a", "obligation-b"],
+      verdictAuthority: "INDEPENDENT",
+    },
+  });
+  assert.equal(deriveBrowserExecutionCheckContract({
+    testCase,
+    sourceBoundAssertionSetRequirements: [sourceRequirement()],
+  }), null);
+});
+
 test("duplicate stable check IDs fail closed", () => {
   assert.equal(deriveBrowserExecutionCheckContract({
     testCase: browserCase(),

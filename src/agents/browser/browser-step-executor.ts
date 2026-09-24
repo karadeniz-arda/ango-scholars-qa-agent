@@ -102,6 +102,23 @@ import {
   ensureRequiredFeatureSurface,
 } from "./browser-feature-surface-resolver.js";
 
+/**
+ * A runtime-only compatibility action may help expose a surface, but failure
+ * cannot suppress later typed source-authorized assertions.
+ */
+export function isAdvisoryCompatibilityNavigationStep(
+  step: BrowserStep
+): boolean {
+  return step.action === "clickButton" &&
+    step.compatibilityNavigation === "ADVISORY";
+}
+
+function requiresAssertionSurfaceGrounding(
+  step: BrowserStep
+): boolean {
+  return step.action === "clickButton" &&
+    step.assertionSurfaceGrounding === "REQUIRED";
+}
 
 
 
@@ -176,6 +193,7 @@ cleanup: DeferredCleanup
         : [];
   const collectionFilterEvidence:
     BrowserCollectionFilterEvidence[] = [];
+  let assertionSurfaceGroundingUnavailable: string | null = null;
   const runtimeObservationResult = () => ({
     ...(runtimeTopTabObservations.length > 0
       ? { runtimeTopTabObservations }
@@ -532,7 +550,25 @@ continue;
       notes.push(result.note);
       console.log(` Generic browser step ${result.note}`);
 
+      if (requiresAssertionSurfaceGrounding(step)) {
+        if (expandedResult?.expandedSurfaceVerified) {
+          assertionSurfaceGroundingUnavailable = null;
+        } else {
+          assertionSurfaceGroundingUnavailable =
+            `required assertion surface was not deterministically grounded ` +
+            `after compatibility navigation "${step.text}"`;
+        }
+      }
+
       if (!result.ok) {
+        if (isAdvisoryCompatibilityNavigationStep(step)) {
+          notes.push(
+            `compatibility navigation action "${step.text}" was unavailable; ` +
+              `continuing with typed source-authorized assertions`
+          );
+          continue;
+        }
+
         hasActionLimitation = true;
 
         await tryOpenLikelyFallback(
@@ -1484,6 +1520,20 @@ await page.waitForTimeout(1000);
     }
 
     if (step.action === "assertTextVisible") {
+      if (assertionSurfaceGroundingUnavailable) {
+        notes.push(
+          `manual required: ${assertionSurfaceGroundingUnavailable}; ` +
+            "source-bound assertions were not evaluated on an ungrounded surface"
+        );
+
+        return {
+          status: "MANUAL_REQUIRED",
+          reasonCategory: "TARGET_SURFACE_UNAVAILABLE",
+          notes,
+          ...runtimeObservationResult(),
+        };
+      }
+
       hasAssertion = true;
 
       if (
@@ -1718,6 +1768,20 @@ let scrollAwareResult:
     }
 
     if (step.action === "assertTextNotVisible") {
+      if (assertionSurfaceGroundingUnavailable) {
+        notes.push(
+          `manual required: ${assertionSurfaceGroundingUnavailable}; ` +
+            "source-bound assertions were not evaluated on an ungrounded surface"
+        );
+
+        return {
+          status: "MANUAL_REQUIRED",
+          reasonCategory: "TARGET_SURFACE_UNAVAILABLE",
+          notes,
+          ...runtimeObservationResult(),
+        };
+      }
+
       hasAssertion = true;
 
       if (

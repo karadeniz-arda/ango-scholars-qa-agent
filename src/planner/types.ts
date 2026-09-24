@@ -51,6 +51,16 @@ export type BrowserStep =
     action: "clickButton";
     text: string;
     interactionId?: string;
+    /** Runtime compatibility navigation may assist execution but never adds proof authority. */
+    compatibilityNavigation?: "ADVISORY";
+    /**
+     * This interaction must establish a fresh semantic surface before later
+     * assertions may contribute deterministic evidence. It is an execution
+     * precondition only: it never authorizes an acceptance requirement.
+     */
+    assertionSurfaceGrounding?: "REQUIRED";
+    contextText?: string;
+    verifyExpandedSurface?: boolean;
   }
 | {
     action: "clickText";
@@ -450,6 +460,7 @@ export type BrowserExecutionCheckRequirement =
       oracle: {
         oracleId: string;
         action:
+          | "assertUrlContains"
           | "assertTextVisible"
           | "assertTextNotVisible"
           | "assertExactVisibleButton";
@@ -491,7 +502,10 @@ export type BrowserTestCase = {
   goal: string;
   startRoute: string;
   successCriteria: string;
-  /** Bounded read-only runtime exploration; never proof or verdict authority. */
+  /**
+   * Legacy frozen-plan marker. New compiled plans use runtime prerequisite
+   * contracts on normal browser cases instead of a separate execution lane.
+   */
   executionPolicy?: { lane: "DISCOVERY_ONLY" };
 
   /**
@@ -2057,7 +2071,7 @@ export type TestPlan = {
     PlannerBrowserObligationBinding[];
   apiCases: ApiTestCase[];
   browserCases: BrowserTestCase[];
-  /** Bounded read-only navigation exploration, separate from trusted cases. */
+  /** Legacy frozen-plan compatibility only; new compiled plans omit this. */
   discoveryBrowserCases?: BrowserTestCase[];
   compiledPlanMetadata?: CompiledPlanMetadata;
   plannerDiagnostics?: PlannerDiagnostics;
@@ -2074,8 +2088,7 @@ export type PlannerCompilationSummary = {
   proposedBrowserCaseCount: number;
   semanticCandidateCount: number;
   rejectedSemanticCandidateCount: number;
-  trustedBrowserCaseCount: number;
-  discoveryBrowserCaseCount: number;
+  browserCaseCount: number;
   effectiveBrowserRuntimeCaseCount: number;
   effectiveRuntimeUnitCount: number;
 };

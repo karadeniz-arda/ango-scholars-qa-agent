@@ -533,10 +533,14 @@ export function ensureAssessmentLanguageEditorNavigationStep(
       contextText:
         "Language Requirements",
       verifyExpandedSurface: true,
+      compatibilityNavigation: "ADVISORY",
     },
     {
       action: "clickButton",
       text: "Level Adjustment",
+      compatibilityNavigation: "ADVISORY",
+      assertionSurfaceGrounding: "REQUIRED",
+      verifyExpandedSurface: true,
     },
     ...steps.filter(
       (step: any) =>

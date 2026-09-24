@@ -130,6 +130,21 @@ function sourceDefinesIndependentDisclosureTargets(value: string): boolean {
 }
 
 /**
+ * A planner may add a generic semantic surface kind to an exact
+ * source-authorized member. This is deliberately a bounded identity check:
+ * it permits only the exact member or that member followed by "page".
+ */
+function sourceMemberMatchesCandidateTarget(
+  memberText: string,
+  candidateTarget: string | undefined
+): boolean {
+  if (candidateTarget === undefined) return false;
+  const member = normalized(memberText).toLowerCase();
+  const target = normalized(candidateTarget).toLowerCase();
+  return target === member || target === `${member} page`;
+}
+
+/**
  * Replaces one safe, parent-level candidate with source-member-specific
  * semantic candidates. This is deliberately pre-execution metadata: it does
  * not alter browser steps, routes, fixtures, proof, or readiness rules.
@@ -166,8 +181,10 @@ export function specializePlannerSourceMemberSemanticCandidates(args: {
     // The relation is source-ledger-only; model claims never participate.
     if (candidate.proposedTargetSurface !== undefined &&
       memberSet.members.some((member) =>
-        normalized(member.canonicalMemberText).toLowerCase() ===
-          normalized(candidate.proposedTargetSurface).toLowerCase()
+        sourceMemberMatchesCandidateTarget(
+          member.canonicalMemberText,
+          candidate.proposedTargetSurface
+        )
       )) continue;
 
     const derived = memberSet.members.flatMap((member) => {
@@ -179,8 +196,10 @@ export function specializePlannerSourceMemberSemanticCandidates(args: {
         other.sourceUnitIds[0] === memberSet.sourceUnitRef.sourceUnitId &&
         (other.sourceMemberSemanticSpecialization?.memberId === member.memberId ||
           (other.proposedTargetSurface !== undefined &&
-            normalized(other.proposedTargetSurface).toLowerCase() ===
-              normalized(member.canonicalMemberText).toLowerCase()))
+            sourceMemberMatchesCandidateTarget(
+              member.canonicalMemberText,
+              other.proposedTargetSurface
+            )))
       );
       if (alreadyRepresented) return [];
       const candidateId = stablePlanningId("browser-semantic-source-member", [
@@ -221,8 +240,10 @@ export function specializePlannerSourceMemberSemanticCandidates(args: {
           ? [other.sourceMemberSemanticSpecialization.memberId]
           : memberSet.members
             .filter((member) => other.proposedTargetSurface !== undefined &&
-              normalized(other.proposedTargetSurface).toLowerCase() ===
-                normalized(member.canonicalMemberText).toLowerCase())
+              sourceMemberMatchesCandidateTarget(
+                member.canonicalMemberText,
+                other.proposedTargetSurface
+              ))
             .map((member) => member.memberId)
       ),
     ]);
@@ -4426,7 +4447,7 @@ function sourceBackedRuntimeReadOnlyAuthority(args: {
   };
 }
 
-function materializeRuntimeNavigationDiscoveryCases(args: {
+function materializeRuntimeNavigationCases(args: {
   containers: PlannerBrowserExecutionContainer[];
   evidenceContracts: PlannerBrowserEvidenceContract[];
   verdictContracts: PlannerBrowserVerdictContract[];
@@ -4450,7 +4471,7 @@ function materializeRuntimeNavigationDiscoveryCases(args: {
     const executionCaseId = container.executionCaseIds[0]!;
     const sourceCase = sourceCaseById.get(executionCaseId);
     if (!sourceCase) return [];
-    const runtimeCaseId = stablePlanningId("web-runtime-navigation-discovery", [
+    const runtimeCaseId = stablePlanningId("web-runtime-navigation", [
       container.executionContainerId,
       executionCaseId,
     ]);
@@ -4462,16 +4483,15 @@ function materializeRuntimeNavigationDiscoveryCases(args: {
       ...sourceCase,
       id: runtimeCaseId,
       persona: container.persona.value!,
-      // Preserve an unresolved route for the runner's existing candidate
-      // discovery and authenticated probe; this is execution reach only.
+      // An unresolved route is a runtime prerequisite of this normal case.
       startRoute:
         container.executionNavigationBinding.status === "BOUND" &&
         container.executionNavigationBinding.route
           ? container.executionNavigationBinding.route
           : "UNKNOWN",
-      executionPolicy: { lane: "DISCOVERY_ONLY" as const },
-      // Discovery observations cannot inherit canonical proof ownership.
-      deterministicProofBindings: [],
+      ...(container.runtimeNavigationResolution
+        ? { runtimeNavigationResolutionContract: container.runtimeNavigationResolution }
+        : {}),
     };
 
     const authority = sourceBackedRuntimeReadOnlyAuthority({
@@ -5460,7 +5480,7 @@ export function transportPlannerBrowserExecutionAuthority(args: {
     if (args.plan.browserCases.length >= MAX_BROWSER_EXECUTION_UNITS) break;
     args.plan.browserCases.push(testCase);
   }
-  const runtimeNavigationDiscoveryCases = materializeRuntimeNavigationDiscoveryCases({
+  const runtimeNavigationCases = materializeRuntimeNavigationCases({
     containers: audit.executionContainers,
     evidenceContracts: audit.evidenceContracts,
     verdictContracts: audit.contracts,
@@ -5469,14 +5489,12 @@ export function transportPlannerBrowserExecutionAuthority(args: {
     obligationLedger: args.obligationLedger,
     sourceLedger: args.plan.acceptanceSourceLedger,
   });
-  args.plan.discoveryBrowserCases = retainBoundedBrowserCases({
-    cases: runtimeNavigationDiscoveryCases,
+  args.plan.browserCases = retainBoundedBrowserCases({
+    cases: [...args.plan.browserCases, ...runtimeNavigationCases],
   });
   audit.allocatedCaseCount = args.plan.browserCases.length;
 
-  args.plan.browserCases = retainBoundedBrowserCases({
-    cases: args.plan.browserCases,
-  });
+  delete args.plan.discoveryBrowserCases;
   audit.allocatedCaseCount = args.plan.browserCases.length;
 
   for (const testCase of args.plan.browserCases) {
@@ -5839,7 +5857,7 @@ export function applyPlannerBrowserSemanticAllocation(args: {
     sourceCases: sourceExecutionCases,
     obligationById,
   });
-  const runtimeNavigationDiscoveryCases = materializeRuntimeNavigationDiscoveryCases({
+  const runtimeNavigationCases = materializeRuntimeNavigationCases({
     containers: evidencePlanning.executionContainers,
     evidenceContracts: evidencePlanning.evidenceContracts,
     verdictContracts: contracts,
@@ -5854,11 +5872,10 @@ export function applyPlannerBrowserSemanticAllocation(args: {
     ...runtimeFixtureCases,
     ...runtimeSurfaceCases,
     ...runtimeTargetCases,
+    ...runtimeNavigationCases,
   ] });
   plan.browserCases = cases;
-  plan.discoveryBrowserCases = retainBoundedBrowserCases({
-    cases: runtimeNavigationDiscoveryCases,
-  });
+  delete plan.discoveryBrowserCases;
 
   const authoritativeIds = obligationLedger.obligations.map((item) => item.id).sort();
   const accountedIds = [...new Set(contracts.flatMap((item) => item.obligationIds))].sort();

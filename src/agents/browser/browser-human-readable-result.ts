@@ -20,7 +20,7 @@ export type BrowserHumanReadableQaResult = {
 export type BrowserHumanReadableQaInput = {
   status: BrowserHumanReadableQaResult["status"];
   reasonCategory?: string;
-  caseVerdict?: { verdict: BrowserHumanReadableQaResult["status"]; reason: string; requiredCheckIds: string[]; passedCheckIds: string[]; failedCheckIds: string[]; missingCheckIds: string[] };
+  caseVerdict?: { verdict: BrowserHumanReadableQaResult["status"]; reason: string; blockerDiagnostic?: string; requiredCheckIds: string[]; passedCheckIds: string[]; failedCheckIds: string[]; missingCheckIds: string[] };
   acceptedRoutePath?: string;
   interactionExecutionCount?: number;
   terminationReason?: string;
@@ -36,6 +36,12 @@ export type BrowserHumanReadableQaInput = {
 };
 
 function reasonFor(code: string): { category: string; explanation: string } {
+  if (code === "ACTUAL_PERSONA_UNAVAILABLE") return { category: "AUTHENTICATION", explanation: "The required authenticated persona was not available to the runtime." };
+  if (code === "PERSONA_MISMATCH") return { category: "AUTHENTICATION", explanation: "The authenticated persona did not match the case's required persona." };
+  if (code === "ACCEPTED_ROUTE_UNAVAILABLE") return { category: "ROUTE_BINDING", explanation: "The runtime could not establish an accepted route for this case." };
+  if (code === "SOURCE_ROUTE_MISMATCH") return { category: "ROUTE_BINDING", explanation: "The accepted runtime route did not match the exact source-authorized route." };
+  if (code === "TARGET_VERIFICATION_UNAVAILABLE") return { category: "TARGET_GROUNDING", explanation: "The runtime could not deterministically verify the requested target on the accepted route." };
+  if (code === "TARGET_VERIFICATION_FAILED") return { category: "TARGET_GROUNDING", explanation: "The runtime deterministically found that the requested target was not verified." };
   if (code === "NO_COMPATIBLE_ENTITY") return { category: "EXISTING_ENTITY_BINDING", explanation: "The required exact existing entity could not be safely selected from the available runtime candidates." };
   if (["FIXTURE_UNAVAILABLE", "TEST_DATA_ISSUE"].includes(code)) return { category: "MISSING_TEST_DATA", explanation: "The required runtime fixture state was not available or could not be verified safely." };
   if (["EXECUTION_CONTRACT_UNAVAILABLE", "NO_SOURCE_AUTHORIZED_EXECUTION_CHECKS"].includes(code)) return { category: "SOURCE_AUTHORITY", explanation: "Available runtime information is insufficient to establish a source-authorized deterministic execution check." };
@@ -49,7 +55,7 @@ function reasonFor(code: string): { category: string; explanation: string } {
 
 export function presentBrowserHumanReadableQaResult(input: BrowserHumanReadableQaInput): BrowserHumanReadableQaResult {
   const status = input.caseVerdict?.verdict ?? input.status;
-  const reasonCode = input.caseVerdict?.reason ?? input.reasonCategory;
+  const reasonCode = input.caseVerdict?.blockerDiagnostic ?? input.caseVerdict?.reason ?? input.reasonCategory;
   const reason = reasonFor(reasonCode ?? "");
   const technical = (blockerCategory: string) => ({
     ...(reasonCode ? { reasonCode } : {}),

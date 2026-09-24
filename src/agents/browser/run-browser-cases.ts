@@ -16,6 +16,13 @@ import {
   probeBrowserRouteCandidates,
 } from "./browser-route-probe.js";
 import {
+  acceptedRuntimeRouteAuthority,
+  acceptedRuntimeRouteFromNavigationBinding,
+  acceptedRuntimeRouteFromProbe,
+  rebindAcceptedRuntimeRoute,
+  type BrowserRuntimeRouteAcceptance,
+} from "./browser-runtime-route-acceptance.js";
+import {
   buildGenericBrowserAssertionHandoffCase,
 } from "./browser-agent-assertion-handoff.js";
 import {
@@ -119,6 +126,10 @@ import {
 import {
   resolveBrowserExecutionSurfacePrerequisite,
 } from "./browser-execution-surface-prerequisite.js";
+import {
+  beginBrowserRunArtifacts,
+  browserRunCaseEvidenceDirectory,
+} from "./browser-run-artifacts.js";
 
 import {
   aggregateGenericBrowserUsefulness,
@@ -486,6 +497,10 @@ export async function runBrowserCases(
   const plan: TestPlan = readExecutionTestPlan(
     options.planPath ? { path: options.planPath } : {}
   ).plan;
+  const browserRunArtifacts = beginBrowserRunArtifacts({
+    issueKey: String(plan.issueKey || "unknown-issue"),
+    consumedPlanPath: options.planPath ?? "qa-results/test-plan.json",
+  });
   const browserExecutionSelection =
     selectMaterializedBrowserRuntimeCases(plan);
   const executionBrowserCases =
@@ -601,9 +616,7 @@ const pendingEvidenceReviews: Array<{
     notes: string[];
   }> = [];
 
-  fs.mkdirSync("qa-results", { recursive: true });
-  fs.mkdirSync("qa-results/evidence", { recursive: true });
-  fs.mkdirSync("qa-results/videos", { recursive: true });
+  fs.mkdirSync(browserRunArtifacts.runRoot, { recursive: true });
   if (
     executionBrowserCases.length === 0
   ) {
@@ -611,13 +624,26 @@ const pendingEvidenceReviews: Array<{
     return results;
   }
 
+  const startupProfile = buildGenericBrowserUsefulnessExecutionProfile();
+  console.log([
+    "Browser runtime profile:",
+    "generic semantic agent: ON",
+    `safe generic execution: ${startupProfile.autonomousRuntime.genericBrowserReadOnlyExecution ? "ON" : "OFF"}`,
+    `evidence review: ${startupProfile.runnerPolicy.evidenceReview ? "ON" : "OFF"}`,
+    `persistent browser mutations: ${startupProfile.runnerPolicy.browserMutationsAllowed ? "ON" : "OFF"}`,
+    `API mutations: ${startupProfile.runnerPolicy.apiMutationsAllowed ? "ON" : "OFF"}`,
+    `fixture provisioning: ${startupProfile.runnerPolicy.fixtureProvisioningAllowed ? "ON" : "OFF"}`,
+  ].join("\n"));
+
 
   const {
     stagehand,
     browser,
     context,
     page: initialPage,
-  } = await createBrowserRuntimeSession(baseUrl);
+  } = await createBrowserRuntimeSession(baseUrl, {
+    videoDirectory: browserRunArtifacts.videosDirectory,
+  });
 
   let page = initialPage;
 
@@ -660,7 +686,9 @@ const pendingEvidenceReviews: Array<{
    * Probe that entry route only once.
    */
   const runtimeRouteProbeCache =
-    new Map<string, string>();
+    new Map<string, BrowserRuntimeRouteAcceptance>();
+  const runtimeAcceptedRouteByCaseId =
+    new Map<string, BrowserRuntimeRouteAcceptance>();
 
   /*
    * Runtime route-discovery pass:
@@ -689,9 +717,22 @@ const pendingEvidenceReviews: Array<{
           await signInAsPersona(page, baseUrl, persona);
           signedInPersona = persona;
         }
-        composedPreparations.set(testCase.id, await prepareComposedRuntimeCase({
+        const preparation = await prepareComposedRuntimeCase({
           testCase, actualPersona: signedInPersona,
-        }));
+        });
+        composedPreparations.set(testCase.id, preparation);
+        if (composedPreparationAllowsInteraction(testCase, preparation, signedInPersona)) {
+          const acceptance = acceptedRuntimeRouteFromNavigationBinding({
+            caseId: testCase.id,
+            persona,
+            composedExecutionCaseId:
+              testCase.composedRuntimeResolution.executionCaseId,
+            binding: preparation.navigationBinding,
+          });
+          if (acceptance) {
+            runtimeAcceptedRouteByCaseId.set(testCase.id, acceptance);
+          }
+        }
       } catch {
         composedPreparations.set(testCase.id,
           blockedComposedPreparation(testCase, "COMPOSED_SESSION_PREPARATION_FAILED"));
@@ -971,7 +1012,15 @@ const candidates =
           );
 
         testCase.startRoute =
-          cachedRoute;
+          cachedRoute.routePath;
+        const reboundAcceptance = rebindAcceptedRuntimeRoute({
+          acceptance: cachedRoute,
+          caseId: testCase.id,
+          persona,
+        });
+        if (reboundAcceptance) {
+          runtimeAcceptedRouteByCaseId.set(testCase.id, reboundAcceptance);
+        }
 
         delete testCase
           .runtimeRouteDiscoveryFailure;
@@ -979,7 +1028,7 @@ const candidates =
         console.log(
           ` Runtime browser route cache hit for ` +
             `${testCase.id}: ${previousRoute} -> ` +
-            `${cachedRoute}`
+          `${cachedRoute.routePath}`
         );
 
         continue;
@@ -994,10 +1043,15 @@ const candidates =
         );
 
       if (probeResult.acceptedRoute) {
-        runtimeRouteProbeCache.set(
-          probeCacheKey,
-          probeResult.acceptedRoute
-        );
+        const routeAcceptance = acceptedRuntimeRouteFromProbe({
+          caseId: testCase.id,
+          persona,
+          probeResult,
+        });
+        if (routeAcceptance) {
+          runtimeRouteProbeCache.set(probeCacheKey, routeAcceptance);
+          runtimeAcceptedRouteByCaseId.set(testCase.id, routeAcceptance);
+        }
 
         const previousRoute =
           String(testCase.startRoute || "UNKNOWN");
@@ -1079,6 +1133,50 @@ const candidates =
 
 for (const testCase of executionCases) {
   console.log(`\nTaking photo: [${testCase.id}] - ${testCase.goal}`);
+
+  const casePersona = testCase.persona as BrowserPersona;
+  const preExecutionRouteAcceptance =
+    runtimeAcceptedRouteByCaseId.get(testCase.id);
+  const preExecutionRouteAuthority = acceptedRuntimeRouteAuthority({
+    ...(preExecutionRouteAcceptance
+      ? { acceptance: preExecutionRouteAcceptance }
+      : {}),
+    caseId: testCase.id,
+    actualPersona: casePersona,
+  });
+  const preExecutionRuntimeContext =
+    buildBrowserDeterministicPassRuntimeContext({
+      acceptedRoutePath: preExecutionRouteAuthority,
+      targetVerified: {
+        status: "UNAVAILABLE",
+        reason: "No final target grounding was recorded before execution was blocked.",
+      },
+      fixtureStatus: {
+        status: "UNAVAILABLE",
+        reason: "No final fixture lifecycle result was recorded before execution was blocked.",
+      },
+    });
+  const preExecutionCaseVerdict = deriveBrowserCaseVerdict({
+    testCase,
+    executionCheckContract: testCase.executionCheckContract,
+    executionAuthority: {
+      actualPersona:
+        signedInPersona === casePersona
+          ? {
+              status: "AVAILABLE",
+              value: casePersona,
+              source: "Runtime route probing authenticated the same execution persona.",
+            }
+          : {
+              status: "UNAVAILABLE",
+              reason: "The final execution persona was not authenticated before execution was blocked.",
+            },
+      acceptedRoutePath: preExecutionRouteAuthority,
+      targetVerified: preExecutionRuntimeContext.targetVerified,
+      fixtureStatus: preExecutionRuntimeContext.fixtureStatus,
+    },
+    runnerStatus: "BLOCKED",
+  });
 
   if (testCase.composedRuntimeResolution) {
     const prepared = composedPreparations.get(testCase.id);
@@ -1244,6 +1342,8 @@ const genericBrowserTestCase = {
           note: routeReason,
         },
       ],
+      deterministicPassRuntimeContext: preExecutionRuntimeContext,
+      caseVerdict: preExecutionCaseVerdict,
     });
 
     console.log(
@@ -1271,6 +1371,8 @@ const genericBrowserTestCase = {
         ].join(" | "),
         successSignal,
         successSignalReached: false,
+        deterministicPassRuntimeContext: preExecutionRuntimeContext,
+        caseVerdict: preExecutionCaseVerdict,
         evidenceSummary: {
           successSignal,
           successSignalReached: false,
@@ -1316,7 +1418,7 @@ const deferredCleanups:
     try {
       await page.setViewportSize({ width: 1280, height: 720 });
 
-const persona = testCase.persona as BrowserPersona;
+const persona = casePersona;
 
 if (signedInPersona !== persona) {
   console.log(
@@ -2194,7 +2296,10 @@ const genericBrowserLegacyReplaySuppressed =
     const authWallDetected = await detectAuthWall(page);
 
     if (authWallDetected) {
-      const screenshotPath = `qa-results/evidence/${testCase.id}-auth-wall.png`;
+      const screenshotPath = `${browserRunCaseEvidenceDirectory(
+        browserRunArtifacts,
+        testCase.id
+      )}/auth-wall.png`;
 
       await page.screenshot({ path: screenshotPath, fullPage: true });
 
@@ -2250,8 +2355,10 @@ const genericBrowserLegacyReplaySuppressed =
         BrowserEvidenceCheckpoint[] = [];
 
       const checkpointDirectory =
-        `qa-results/evidence/` +
-        `${testCase.id}-checkpoints`;
+        `${browserRunCaseEvidenceDirectory(
+          browserRunArtifacts,
+          testCase.id
+        )}/checkpoints`;
 
       fs.rmSync(
         checkpointDirectory,
@@ -3404,8 +3511,10 @@ deferredCleanups.push(
       }
 
       const screenshotPath =
-        `qa-results/evidence/` +
-        `${testCase.id}-screenshot.png`;
+        `${browserRunCaseEvidenceDirectory(
+          browserRunArtifacts,
+          testCase.id
+        )}/final-screenshot.png`;
 
       /*
        * Preserve the URL and visible page state before
@@ -3645,9 +3754,15 @@ pendingEvidenceReviews.push({
         acceptedRoutePath: browserSourceBoundAssertionPathOf(page.url()),
         actualPersona: persona,
       });
+      const runtimeRouteAcceptance = runtimeAcceptedRouteByCaseId.get(testCase.id);
+      const acceptedRouteAuthority = acceptedRuntimeRouteAuthority({
+        ...(runtimeRouteAcceptance ? { acceptance: runtimeRouteAcceptance } : {}),
+        caseId: testCase.id,
+        actualPersona: persona,
+      });
       const deterministicPassRuntimeContext = buildBrowserDeterministicPassRuntimeContext({
         fixtureStatus,
-        ...(browserSourceBoundAssertionPathOf(page.url()) ? { acceptedRoutePath: { status: "AVAILABLE" as const, value: browserSourceBoundAssertionPathOf(page.url())!, source: "Final accepted runtime route." } } : {}),
+        acceptedRoutePath: acceptedRouteAuthority,
         ...proofSignals,
         ...runtimeAuditSignals,
       });
@@ -3690,20 +3805,7 @@ pendingEvidenceReviews.push({
             value: persona,
             source: "Final authenticated browser persona.",
           },
-          ...(acceptedRoutePath
-            ? {
-                acceptedRoutePath: {
-                  status: "AVAILABLE" as const,
-                  value: acceptedRoutePath,
-                  source: "Final accepted runtime route.",
-                },
-              }
-            : {
-                acceptedRoutePath: {
-                  status: "UNAVAILABLE" as const,
-                  reason: "No accepted runtime route was finalized.",
-                },
-              }),
+          acceptedRoutePath: acceptedRouteAuthority,
           targetVerified: proofSignals.targetVerified,
           fixtureStatus,
         },
@@ -3737,12 +3839,14 @@ pendingEvidenceReviews.push({
 
       results.push({
         id: testCase.id,
+        persona: testCase.persona,
         status: stepResult.status,
         reasonCategory: stepResult.reasonCategory,
         deterministicPassRuntimeContext,
         caseVerdict: stepResult.caseVerdict,
         evidenceReview,
         startRoute: testCase.startRoute,
+        screenshotPath,
         evidence: [
           screenshotPath,
           checkpointEvidence.length > 0
@@ -4070,7 +4174,7 @@ await executeDeferredCleanups(
         );
 
         const caseVideoPath =
-          `qa-results/videos/` +
+          `${browserRunArtifacts.videosDirectory}/` +
           `${issueKey}-${testCase.id}.webm`;
 
         if (
@@ -4476,7 +4580,7 @@ const evidenceReview =
       : undefined;
     const reasonCode = deepRouteBinding && deepRouteBinding.status !== "RESOLVED"
       ? deepRouteBinding?.status
-      : result.caseVerdict?.reason ?? result.reasonCategory;
+      : result.caseVerdict?.blockerDiagnostic ?? result.caseVerdict?.reason ?? result.reasonCategory;
     const fixtureRequirement = testCase?.fixtureRequirements?.filter(Boolean).join("; ");
     result.humanReadableResult = presentBrowserHumanReadableQaResult({
       status: result.status,
@@ -4522,6 +4626,21 @@ const evidenceReview =
       console.log(formatBrowserHumanReadableQaResult(result.humanReadableResult));
     }
   }
+
+  const statusCounts = Object.fromEntries(
+    ["PASS", "FAIL", "BLOCKED", "MANUAL_REQUIRED", "ERROR"].map((status) => [
+      status,
+      results.filter((result) => result.status === status).length,
+    ])
+  );
+  console.log([
+    "Browser run summary:",
+    ...Object.entries(statusCounts).map(([status, count]) => `${status}: ${count}`),
+    ...results.map((result) =>
+      `[${result.status}] ${result.id} — ${result.caseVerdict?.blockerDiagnostic ?? result.caseVerdict?.reason ?? result.reasonCategory ?? "not recorded"}`
+    ),
+    `Run artifacts: ${browserRunArtifacts.runRoot}`,
+  ].join("\n"));
 
   /*
    * GENERIC_BROWSER_USEFULNESS_RUN_SUMMARY_V1
@@ -4607,7 +4726,7 @@ const evidenceReview =
   };
 
   const genericBrowserUsefulnessRunArtifactPath =
-    "qa-results/generic-browser-usefulness-run-summary.json";
+    `${browserRunArtifacts.runRoot}/generic-browser-usefulness-run-summary.json`;
 
   fs.writeFileSync(
     genericBrowserUsefulnessRunArtifactPath,

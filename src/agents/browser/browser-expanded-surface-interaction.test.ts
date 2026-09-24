@@ -415,3 +415,131 @@ test(
     );
   }
 );
+
+test(
+  "withholds positive and negative assertion evidence when a required surface is ungrounded",
+  async () => {
+    await withPage(
+      `<button onclick="this.dataset.clicked = 'true'">Open details</button>`,
+      async (page) => {
+        for (const assertion of [
+          { action: "assertTextVisible" as const, text: "Required text" },
+          { action: "assertTextNotVisible" as const, text: "Retired text" },
+        ]) {
+          const result = await runGenericBrowserSteps(page, {
+            goal: "Verify source-authorized content.",
+            successCriteria: "The required content is observable.",
+            steps: [
+              {
+                action: "clickButton",
+                text: "Open details",
+                compatibilityNavigation: "ADVISORY",
+                assertionSurfaceGrounding: "REQUIRED",
+                verifyExpandedSurface: true,
+              },
+              { ...assertion, oracleId: "source-authorized-oracle" },
+            ],
+          });
+
+          assert.equal(result.status, "MANUAL_REQUIRED");
+          assert.equal(result.reasonCategory, "TARGET_SURFACE_UNAVAILABLE");
+          assert.equal(result.deterministicEvidence?.length ?? 0, 0);
+        }
+      }
+    );
+  }
+);
+
+test(
+  "grounded assertion surfaces permit deterministic confirmation and contradiction",
+  async () => {
+    await withPage(
+      `
+        <button onclick="document.querySelector('#details').hidden = false">Open details</button>
+        <section id="details" role="dialog" style="min-height: 80px" hidden>Required text</section>
+      `,
+      async (page) => {
+        const confirmed = await runGenericBrowserSteps(page, {
+          goal: "Verify source-authorized content.",
+          successCriteria: "The required content is observable.",
+          steps: [
+            {
+              action: "clickButton",
+              text: "Open details",
+              compatibilityNavigation: "ADVISORY",
+              assertionSurfaceGrounding: "REQUIRED",
+              verifyExpandedSurface: true,
+            },
+            { action: "assertTextVisible", text: "Required text", oracleId: "source-authorized-oracle" },
+          ],
+        });
+        assert.equal(confirmed.status, "PASS");
+        assert.equal(confirmed.deterministicEvidence?.[0]?.passed, true);
+      }
+    );
+
+    await withPage(
+      `
+        <button onclick="document.querySelector('#details').hidden = false">Open details</button>
+        <section id="details" role="dialog" style="min-height: 80px" hidden>Different text</section>
+      `,
+      async (page) => {
+        const contradicted = await runGenericBrowserSteps(page, {
+          goal: "Verify source-authorized content.",
+          successCriteria: "The required content is observable.",
+          steps: [
+            {
+              action: "clickButton",
+              text: "Open details",
+              compatibilityNavigation: "ADVISORY",
+              assertionSurfaceGrounding: "REQUIRED",
+              verifyExpandedSurface: true,
+            },
+            { action: "assertTextVisible", text: "Required text", oracleId: "source-authorized-oracle" },
+          ],
+        });
+        assert.equal(contradicted.status, "FAIL");
+        assert.equal(contradicted.deterministicEvidence?.[0]?.passed, false);
+      }
+    );
+  }
+);
+
+test(
+  "a later grounded surface clears an earlier advisory surface failure",
+  async () => {
+    await withPage(
+      `
+        <button onclick="this.dataset.clicked = 'true'">Unproductive navigation</button>
+        <button onclick="document.querySelector('#details').hidden = false">Open details</button>
+        <section id="details" role="dialog" style="min-height: 80px" hidden>Required text</section>
+      `,
+      async (page) => {
+        const result = await runGenericBrowserSteps(page, {
+          goal: "Verify source-authorized content.",
+          successCriteria: "The required content is observable.",
+          steps: [
+            {
+              action: "clickButton",
+              text: "Unproductive navigation",
+              compatibilityNavigation: "ADVISORY",
+              assertionSurfaceGrounding: "REQUIRED",
+              verifyExpandedSurface: true,
+            },
+            {
+              action: "clickButton",
+              text: "Open details",
+              compatibilityNavigation: "ADVISORY",
+              assertionSurfaceGrounding: "REQUIRED",
+              verifyExpandedSurface: true,
+            },
+            { action: "assertTextVisible", text: "Required text", oracleId: "source-authorized-oracle" },
+          ],
+        });
+
+        assert.equal(result.status, "PASS");
+        assert.equal(result.deterministicEvidence?.[0]?.passed, true);
+      }
+    );
+  }
+);

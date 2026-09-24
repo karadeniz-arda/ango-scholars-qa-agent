@@ -23,7 +23,8 @@ export type BrowserRuntimeSession = {
 };
 
 export async function createBrowserRuntimeSession(
-  baseUrl: string
+  baseUrl: string,
+  options: { videoDirectory?: string } = {}
 ): Promise<BrowserRuntimeSession> {
   const stagehand = new Stagehand({ env: "LOCAL" });
   await stagehand.init();
@@ -39,7 +40,7 @@ export async function createBrowserRuntimeSession(
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     recordVideo: {
-      dir: "qa-results/videos/",
+      dir: options.videoDirectory ?? "qa-results/videos/",
       size: { width: 1280, height: 720 },
     },
   });

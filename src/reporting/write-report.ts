@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type {
   BrowserTestCase,
   TestPlan,
@@ -82,6 +83,7 @@ type WriteReportInput = {
   plan: TestPlan;
   apiResults?: TestResult[];
   browserResults?: TestResult[];
+  outputPath?: string;
 };
 
 function escapeTableCell(value: unknown): string {
@@ -720,8 +722,9 @@ export function writeReport({
   plan,
   apiResults = [],
   browserResults = [],
+  outputPath = "qa-results/report.md",
 }: WriteReportInput) {
-  fs.mkdirSync("qa-results", { recursive: true });
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const now = new Date().toISOString();
   const productFindings =
@@ -786,7 +789,7 @@ ${renderBrowserEvidenceDetails(browserResults)}
 ${renderObservations(apiResults, browserResults)}
 `;
 
-  fs.writeFileSync("qa-results/report.md", report, "utf8");
+  fs.writeFileSync(outputPath, report, "utf8");
 
-  console.log("Report saved to qa-results/report.md");
+  console.log(`Report saved to ${outputPath}`);
 }

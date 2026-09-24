@@ -11,6 +11,7 @@ dist/
 
 .DS_Store
 .local-artifacts/
+local-dev/
 /*.txt
 /*.zip
 /*.patch
